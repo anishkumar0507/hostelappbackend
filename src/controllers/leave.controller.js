@@ -59,8 +59,14 @@ export const createLeaveRequest = async (req, res) => {
     });
 
     // Populate student details
-    await leave.populate('studentId', 'userId room rollNumber');
-    await leave.populate('studentId.userId', 'name');
+    await leave.populate({
+      path: 'studentId',
+      select: 'userId room rollNumber',
+      populate: {
+        path: 'userId',
+        select: 'name'
+      }
+    });
 
     res.status(201).json({
       success: true,
@@ -108,8 +114,14 @@ export const getAllLeaveRequests = async (req, res) => {
     // By default show all; frontend can filter for "ApprovedByParent" for pending warden approval
 
     const leaves = await Leave.find({ ...filter, institutionId: req.user.institutionId })
-      .populate('studentId', 'userId room rollNumber')
-      .populate('studentId.userId', 'name')
+      .populate({
+        path: 'studentId',
+        select: 'userId room rollNumber',
+        populate: {
+          path: 'userId',
+          select: 'name'
+        }
+      })
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 });
 
@@ -265,8 +277,14 @@ export const parentApproveOrReject = async (req, res) => {
     await leave.save();
 
     const populated = await Leave.findById(leave._id)
-      .populate('studentId', 'userId room rollNumber')
-      .populate('studentId.userId', 'name')
+      .populate({
+        path: 'studentId',
+        select: 'userId room rollNumber',
+        populate: {
+          path: 'userId',
+          select: 'name'
+        }
+      })
       .populate('parentApprovedBy', 'name');
 
     return res.status(200).json({
@@ -347,8 +365,14 @@ export const updateLeaveStatus = async (req, res) => {
       { _id: id, institutionId: req.user.institutionId },
       updateData,
       { new: true }
-    ).populate('studentId', 'userId room rollNumber')
-     .populate('studentId.userId', 'name')
+    ).populate({
+      path: 'studentId',
+      select: 'userId room rollNumber',
+      populate: {
+        path: 'userId',
+        select: 'name'
+      }
+    })
      .populate('approvedBy', 'name');
 
     if (!updated) {
