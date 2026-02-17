@@ -59,7 +59,7 @@ export const createLeaveRequest = async (req, res) => {
     });
 
     // Populate student details
-    await leave.populate('studentId', 'userId room');
+    await leave.populate('studentId', 'userId room rollNumber');
     await leave.populate('studentId.userId', 'name');
 
     res.status(201).json({
@@ -77,6 +77,7 @@ export const createLeaveRequest = async (req, res) => {
         createdAt: leave.createdAt,
         student: {
           name: leave.studentId.userId.name,
+          rollNumber: leave.studentId.rollNumber || 'N/A',
           room: leave.studentId.room,
         },
       },
@@ -107,7 +108,7 @@ export const getAllLeaveRequests = async (req, res) => {
     // By default show all; frontend can filter for "ApprovedByParent" for pending warden approval
 
     const leaves = await Leave.find({ ...filter, institutionId: req.user.institutionId })
-      .populate('studentId', 'userId room')
+      .populate('studentId', 'userId room rollNumber')
       .populate('studentId.userId', 'name')
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 });
@@ -126,6 +127,7 @@ export const getAllLeaveRequests = async (req, res) => {
       rejectionReason: leave.rejectionReason,
       student: {
         name: leave.studentId?.userId?.name || 'Unknown Student',
+        rollNumber: leave.studentId?.rollNumber || 'N/A',
         room: leave.studentId?.room || 'N/A',
       },
       approvedBy: leave.approvedBy ? leave.approvedBy.name : null,
@@ -263,7 +265,7 @@ export const parentApproveOrReject = async (req, res) => {
     await leave.save();
 
     const populated = await Leave.findById(leave._id)
-      .populate('studentId', 'userId room')
+      .populate('studentId', 'userId room rollNumber')
       .populate('studentId.userId', 'name')
       .populate('parentApprovedBy', 'name');
 
@@ -345,7 +347,7 @@ export const updateLeaveStatus = async (req, res) => {
       { _id: id, institutionId: req.user.institutionId },
       updateData,
       { new: true }
-    ).populate('studentId', 'userId room')
+    ).populate('studentId', 'userId room rollNumber')
      .populate('studentId.userId', 'name')
      .populate('approvedBy', 'name');
 
