@@ -125,8 +125,8 @@ export const getAllLeaveRequests = async (req, res) => {
       approvedAt: leave.approvedAt,
       rejectionReason: leave.rejectionReason,
       student: {
-        name: leave.studentId.userId.name,
-        room: leave.studentId.room,
+        name: leave.studentId?.userId?.name || 'Unknown Student',
+        room: leave.studentId?.room || 'N/A',
       },
       approvedBy: leave.approvedBy ? leave.approvedBy.name : null,
     }));
