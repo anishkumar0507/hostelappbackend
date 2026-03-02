@@ -13,6 +13,7 @@ import leaveRoutes from './routes/leave.routes.js';
 import parentRoutes from './routes/parent.routes.js';
 import locationRoutes from './routes/location.routes.js';
 import chatRoutes from './routes/chat.routes.js';
+import menuRoutes from './routes/menu.routes.js';
 
 // Import error middleware
 import { errorHandler, notFound } from './middleware/error.middleware.js';
@@ -87,6 +88,7 @@ app.use('/api/leaves', leaveRoutes);
 app.use('/api/parent', parentRoutes);
 app.use('/api/location', locationRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/menu', menuRoutes);
 
 // Error handling middleware (must be last)
 app.use(notFound);
