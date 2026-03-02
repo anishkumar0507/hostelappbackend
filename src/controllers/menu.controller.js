@@ -250,10 +250,7 @@ export const deleteMenu = async (req, res) => {
       });
     }
 
-    // Check if warden created this menu
-    if (menu.createdBy.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,belongs to same institution
+    // Check if warden belongs to same institution
     if (menu.institutionId.toString() !== req.user.institutionId.toString()) {
       return res.status(403).json({
         success: false,
@@ -263,7 +260,10 @@ export const deleteMenu = async (req, res) => {
 
     // Delete votes and reviews associated with this menu
     await MenuVote.deleteMany({ menuId: id });
-    await MenuReview
+    await MenuReview.deleteMany({ menuId: id });
+
+    await Menu.findByIdAndDelete(id);
+
     res.status(200).json({
       success: true,
       message: 'Menu deleted successfully',
@@ -276,7 +276,8 @@ export const deleteMenu = async (req, res) => {
   }
 };
 
-/**meal (Student only)
+/**
+ * @desc    Vote on menu meal (Student only)
  * @route   POST /api/menu/:id/vote
  * @access  Private (Student only)
  */
