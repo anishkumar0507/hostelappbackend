@@ -232,14 +232,15 @@ export const getMenus = async (req, res) => {
       };
     }
 
-    if (status) {
-      filter.status = status;
-    }
-
+    // Wardens see ALL menus (draft + published)
     // Students only see published menus
     if (req.user.role === 'student') {
       filter.status = 'published';
+    } else if (status) {
+      // Only apply explicit status filter for non-students and if provided
+      filter.status = status;
     }
+    // For wardens with no explicit status: return ALL menus
 
     const menus = await Menu.find(filter)
       .populate('createdBy', 'name email')
