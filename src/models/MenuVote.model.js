@@ -19,7 +19,7 @@ const menuVoteSchema = new mongoose.Schema(
     },
     studentName: {
       type: String,
-      trim: true,
+      required: true,
     },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -52,9 +52,9 @@ const menuVoteSchema = new mongoose.Schema(
   }
 );
 
-// One student can vote once per meal per day (institution scoped)
+// One student can vote once per meal type (enforced at student level, not per day)
 menuVoteSchema.index(
-  { institutionId: 1, studentId: 1, mealType: 1, date: 1 },
+  { studentId: 1, mealType: 1 },
   { unique: true }
 );
 

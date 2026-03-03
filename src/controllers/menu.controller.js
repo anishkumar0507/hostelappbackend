@@ -444,6 +444,7 @@ export const voteOnMenu = async (req, res) => {
     const { id: menuId } = req.params;
     const { mealType, voteType, rating } = req.body;
 
+    // Validate inputs
     if (!['Breakfast', 'Lunch', 'Snacks', 'Dinner'].includes(mealType)) {
       return res.status(400).json({
         success: false,
@@ -481,7 +482,7 @@ export const voteOnMenu = async (req, res) => {
       });
     }
 
-    // Get student info
+    // Get student info - REQUIRED for studentName
     const student = await Student.findOne({ userId: req.user._id });
     if (!student) {
       return res.status(404).json({
@@ -490,8 +491,7 @@ export const voteOnMenu = async (req, res) => {
       });
     }
 
-    const normalizedVoteDate = new Date(menu.menuDate);
-    normalizedVoteDate.setHours(0, 0, 0, 0);
+    // Build student name - REQUIRED field
     const studentName =
       `${student.firstName || ''} ${student.lastName || ''}`.trim() ||
       student.rollNumber ||
@@ -505,52 +505,84 @@ export const voteOnMenu = async (req, res) => {
       });
     }
 
-    // Check if student already voted for this meal on this day
+    const normalizedVoteDate = new Date(menu.menuDate);
+    normalizedVoteDate.setHours(0, 0, 0, 0);
+
+    // Check if student already voted for this meal type
+    // Key: studentId + mealType (one vote per meal type)
     let existingVote = await MenuVote.findOne({
-      institutionId: req.user.institutionId,
       studentId: student._id,
       mealType,
-      date: normalizedVoteDate,
     });
 
-    if (existingVote) {
-      // Update existing vote
-      existingVote.menuId = menuId;
-      existingVote.voteType = voteType;
-      existingVote.rating = rating;
-      existingVote.studentName = studentName.trim();
-      existingVote.date = normalizedVoteDate;
-      await existingVote.save();
+    try {
+      if (existingVote) {
+        // Update existing vote
+        existingVote.menuId = menuId;
+        existingVote.voteType = voteType;
+        existingVote.rating = rating;
+        existingVote.studentName = studentName.trim();
+        existingVote.date = normalizedVoteDate;
+        await existingVote.save();
 
-      return res.status(200).json({
-        success: true,
-        message: 'Vote updated successfully',
-        data: existingVote,
+        return res.status(200).json({
+          success: true,
+          message: 'Vote updated successfully',
+          data: existingVote,
+        });
+      }
+
+      // Create new vote
+      const newVote = await MenuVote.create({
+        institutionId: req.user.institutionId,
+        menuId,
+        studentId: student._id,
+        studentName: studentName.trim(),
+        userId: req.user._id,
+        mealType,
+        voteType,
+        rating,
+        date: normalizedVoteDate,
       });
+
+      return res.status(201).json({
+        success: true,
+        message: 'Vote recorded successfully',
+        data: newVote,
+      });
+    } catch (dbError) {
+      // Handle E11000 duplicate key error gracefully
+      if (dbError.code === 11000) {
+        // Race condition: another request created the vote. Update it instead.
+        const raceVote = await MenuVote.findOne({
+          studentId: student._id,
+          mealType,
+        });
+
+        if (raceVote) {
+          raceVote.menuId = menuId;
+          raceVote.voteType = voteType;
+          raceVote.rating = rating;
+          raceVote.studentName = studentName.trim();
+          raceVote.date = normalizedVoteDate;
+          await raceVote.save();
+
+          return res.status(200).json({
+            success: true,
+            message: 'Vote updated successfully',
+            data: raceVote,
+          });
+        }
+      }
+
+      // Re-throw other errors
+      throw dbError;
     }
-
-    // Create new vote
-    const newVote = await MenuVote.create({
-      institutionId: req.user.institutionId,
-      menuId,
-      studentId: student._id,
-      studentName: studentName.trim(),
-      userId: req.user._id,
-      mealType,
-      voteType,
-      rating,
-      date: normalizedVoteDate,
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'Vote recorded successfully',
-      data: newVote,
-    });
   } catch (error) {
+    console.error('Vote error:', error);
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: error.message || 'Failed to record vote',
     });
   }
 };
