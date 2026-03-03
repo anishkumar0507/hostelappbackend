@@ -50,6 +50,17 @@ export const getPolls = async (req, res) => {
 
     const likedBy = likedVotes.map(toStudentSummary);
     const dislikedBy = dislikedVotes.map(toStudentSummary);
+    const voters = votes.map((vote) => ({
+      studentId: vote.studentId?._id || vote.studentId || null,
+      studentName:
+        `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
+        vote.studentName ||
+        vote.studentId?.rollNo ||
+        'Unknown Student',
+      voteType: vote.voteType,
+      mealType: vote.mealType,
+      createdAt: vote.createdAt,
+    }));
 
     const totalLikes = likedBy.length;
     const totalDislikes = dislikedBy.length;
@@ -71,7 +82,9 @@ export const getPolls = async (req, res) => {
 
     const pollIds = polls.map((poll) => poll._id);
     const pollVotes = pollIds.length
-      ? await PollVote.find({ pollId: { $in: pollIds } }).lean()
+      ? await PollVote.find({ pollId: { $in: pollIds } })
+          .populate('studentId', 'rollNo firstName lastName')
+          .lean()
       : [];
 
     const pollsWithVotes = polls.map((poll) => {
@@ -95,6 +108,20 @@ export const getPolls = async (req, res) => {
         ...poll,
         totalVotes: pollTotalVotes,
         optionVotes,
+        votersByOption: (poll.options || []).reduce((accumulator, option) => {
+          accumulator[option.id] = votesForPoll
+            .filter((vote) => vote.optionId === option.id)
+            .map((vote) => ({
+              studentId: vote.studentId?._id || vote.studentId || null,
+              studentName:
+                `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
+                vote.studentId?.rollNo ||
+                'Unknown Student',
+              selectedOption: option.text,
+              createdAt: vote.createdAt,
+            }));
+          return accumulator;
+        }, {}),
       };
     });
 
@@ -108,6 +135,7 @@ export const getPolls = async (req, res) => {
         dislikePercentage,
         likedBy,
         dislikedBy,
+        voters,
         polls: pollsWithVotes,
       },
     });
@@ -455,17 +483,29 @@ export const voteOnMenu = async (req, res) => {
       });
     }
 
-    // Check if student already voted
+    const normalizedVoteDate = new Date(menu.menuDate);
+    normalizedVoteDate.setHours(0, 0, 0, 0);
+    const studentName =
+      `${student.firstName || ''} ${student.lastName || ''}`.trim() ||
+      student.rollNo ||
+      req.user.name ||
+      'Unknown Student';
+
+    // Check if student already voted for this meal on this day
     let existingVote = await MenuVote.findOne({
-      menuId,
+      institutionId: req.user.institutionId,
       studentId: student._id,
       mealType,
+      date: normalizedVoteDate,
     });
 
     if (existingVote) {
       // Update existing vote
+      existingVote.menuId = menuId;
       existingVote.voteType = voteType;
       existingVote.rating = rating;
+      existingVote.studentName = studentName;
+      existingVote.date = normalizedVoteDate;
       await existingVote.save();
 
       return res.status(200).json({
@@ -480,10 +520,12 @@ export const voteOnMenu = async (req, res) => {
       institutionId: req.user.institutionId,
       menuId,
       studentId: student._id,
+      studentName,
       userId: req.user._id,
       mealType,
       voteType,
       rating,
+      date: normalizedVoteDate,
     });
 
     res.status(201).json({
@@ -908,9 +950,16 @@ export const getVotingDetails = async (req, res) => {
       }
 
       const voter = {
-        studentName: `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim(),
+        studentId: vote.studentId?._id || vote.studentId || null,
+        studentName:
+          `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
+          vote.studentName ||
+          vote.studentId?.rollNo ||
+          'Unknown Student',
         rollNo: vote.studentId?.rollNo,
+        voteType: vote.voteType,
         rating: vote.rating,
+        date: vote.date,
         timestamp: vote.createdAt,
       };
 
@@ -931,7 +980,7 @@ export const getVotingDetails = async (req, res) => {
     console.error('Error getting voting details:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch voting details',
+      message: error.message,
     });
   }
 };

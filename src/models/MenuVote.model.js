@@ -17,6 +17,10 @@ const menuVoteSchema = new mongoose.Schema(
       ref: 'Student',
       required: true,
     },
+    studentName: {
+      type: String,
+      trim: true,
+    },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -38,15 +42,19 @@ const menuVoteSchema = new mongoose.Schema(
       max: 5,
       required: true,
     },
+    date: {
+      type: Date,
+      required: true,
+    },
   },
   {
     timestamps: true,
   }
 );
 
-// Create unique index - one student can vote once per meal per day
+// One student can vote once per meal per day (institution scoped)
 menuVoteSchema.index(
-  { menuId: 1, studentId: 1, mealType: 1 },
+  { institutionId: 1, studentId: 1, mealType: 1, date: 1 },
   { unique: true }
 );
 
