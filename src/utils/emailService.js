@@ -27,9 +27,8 @@ const createTransporter = () => {
 
     console.log('📧 Creating email transporter...');
     
-    // Determine email provider
-    const usingCustomHost = process.env.EMAIL_HOST && process.env.EMAIL_PORT;
-    const host = process.env.EMAIL_HOST || 'smtp.gmail.com';
+    // Brevo SMTP configuration
+    const host = process.env.EMAIL_HOST || 'smtp-relay.brevo.com';
     const port = parseInt(process.env.EMAIL_PORT || 587, 10);
     const secure = port === 465; // true for 465, false for 587 and others
     
@@ -38,41 +37,24 @@ const createTransporter = () => {
     console.log(`   Secure (TLS): ${secure}`);
     console.log(`   Auth User: ${process.env.EMAIL_USER ? '✓ configured' : '✗ missing'}`);
 
-    const transporterConfig = usingCustomHost
-      ? {
-          host,
-          port,
-          secure,
-          auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-          },
-          connectionTimeout: 25000,
-          greetingTimeout: 25000,
-          socketTimeout: 25000,
-          logger: process.env.NODE_ENV === 'development',
-          debug: process.env.NODE_ENV === 'development',
-          tls: {
-            rejectUnauthorized: false,
-            minVersion: 'TLSv1.2',
-          },
-        }
-      : {
-          service: 'gmail',
-          auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-          },
-          connectionTimeout: 25000,
-          greetingTimeout: 25000,
-          socketTimeout: 25000,
-          logger: process.env.NODE_ENV === 'development',
-          debug: process.env.NODE_ENV === 'development',
-          tls: {
-            rejectUnauthorized: false,
-            minVersion: 'TLSv1.2',
-          },
-        };
+    const transporterConfig = {
+      host,
+      port,
+      secure,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+      connectionTimeout: 20000,
+      greetingTimeout: 20000,
+      socketTimeout: 20000,
+      logger: process.env.NODE_ENV === 'development',
+      debug: process.env.NODE_ENV === 'development',
+      tls: {
+        rejectUnauthorized: false,
+        minVersion: 'TLSv1.2',
+      },
+    };
 
     return nodemailer.createTransport(transporterConfig);
   } catch (error) {
@@ -126,9 +108,9 @@ export const verifyEmailTransporter = async () => {
     console.error('\n   Possible causes:');
     
     if (errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
-      console.error('   → Render may block outbound SMTP connections');
-      console.error('   → Network firewall blocking port 587 or 465');
+      console.error('   → Network firewall blocking SMTP port');
       console.error('   → SMTP server not responding');
+      console.error('   → Check EMAIL_HOST and EMAIL_PORT in .env');
     }
     if (errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo')) {
       console.error('   → EMAIL_HOST value is incorrect or unreachable');
@@ -136,17 +118,19 @@ export const verifyEmailTransporter = async () => {
     }
     if (errorMsg.includes('Invalid login') || errorMsg.includes('authentication')) {
       console.error('   → EMAIL_USER or EMAIL_PASS is incorrect');
-      console.error('   → Gmail requires App Passwords, not account password');
+      console.error('   → For Brevo: Verify SMTP credentials from account settings');
     }
     if (errorMsg.includes('STARTTLS')) {
       console.error('   → TLS/SSL configuration mismatch with port');
+      console.error('   → Port 587 requires secure: false');
+      console.error('   → Port 465 requires secure: true');
     }
     
-    console.error('\n   Recommendations:');
-    console.error('   1. For Gmail: Use App Passwords (not regular password)');
-    console.error('   2. For Render: Switch to Brevo or SendGrid (more reliable)');
-    console.error('   3. Check .env EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS');
-    console.error('   4. Verify Google Account 2FA is enabled for Gmail App Passwords');
+    console.error('\n   Verification checklist:');
+    console.error('   1. EMAIL_HOST is set and correct');
+    console.error('   2. EMAIL_PORT matches host requirements (587 or 465)');
+    console.error('   3. EMAIL_USER and EMAIL_PASS are valid');
+    console.error('   4. Check firewall/network allows outbound SMTP');
     console.error('\n');
     
     emailServiceEnabled = false;
@@ -289,7 +273,7 @@ This is an automated message from HostelEase Management System.
     await Promise.race([
       transporter.sendMail(mailOptions),
       new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)
+        setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)
       )
     ]);
     
@@ -414,7 +398,7 @@ HostelEase Management System.
 
     await Promise.race([
       transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
     ]);
     console.log(`✅ Parent temporary password email sent successfully to ${email}`);
     return { success: true, message: 'Email sent to parent' };
@@ -501,7 +485,7 @@ export const sendPaymentReceiptEmail = async ({
 
     await Promise.race([
       transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
     ]);
 
     console.log(`✅ Payment receipt email sent successfully to ${to}`);
@@ -566,7 +550,7 @@ export const sendPaymentReminderEmail = async ({
 
     await Promise.race([
       transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
     ]);
 
     console.log(`✅ Payment reminder email sent successfully to ${to}`);
