@@ -964,17 +964,10 @@ export const getVotingDetails = async (req, res) => {
       }
 
       const voter = {
-        studentId: vote.studentId?._id || vote.studentId || null,
-        studentName:
-          `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
-          vote.studentName ||
-          vote.studentId?.rollNo ||
-          'Unknown Student',
-        rollNo: vote.studentId?.rollNo,
+        studentId: vote.studentId,
+        studentName: vote.studentName,
         voteType: vote.voteType,
-        rating: vote.rating,
-        date: vote.date,
-        timestamp: vote.createdAt,
+        createdAt: vote.createdAt,
       };
 
       if (vote.voteType === 'like') {
