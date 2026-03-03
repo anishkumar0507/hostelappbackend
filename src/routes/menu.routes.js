@@ -15,6 +15,7 @@ import {
   getReviews,
   publishMenu,
   getVotingDetails,
+  getMenuDetails,
 } from '../controllers/menu.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 import { authorize } from '../middleware/role.middleware.js';
@@ -50,6 +51,9 @@ router.delete('/poll/:id', authorize('warden'), deletePoll);
 
 // Get menu feedback (likes/dislikes) - must be above '/:id'
 router.get('/feedback/:id', getMenuFeedback);
+
+// Get menu details with full stats (Warden only) - must be above '/:id'
+router.get('/:id/details', authorize('warden'), getMenuDetails);
 
 // Get single menu with stats
 router.get('/:id', getMenuById);

@@ -52,9 +52,9 @@ const menuVoteSchema = new mongoose.Schema(
   }
 );
 
-// One student can vote once per meal type (enforced at student level, not per day)
+// One student can vote once per menu per meal type
 menuVoteSchema.index(
-  { studentId: 1, mealType: 1 },
+  { menuId: 1, studentId: 1, mealType: 1 },
   { unique: true }
 );
 

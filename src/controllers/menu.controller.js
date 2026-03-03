@@ -199,6 +199,14 @@ export const createMenu = async (req, res) => {
       status: 'draft',
     });
 
+    console.log('✅ Menu created:', {
+      _id: menu._id,
+      date: menu.menuDate,
+      status: menu.status,
+      mealsKeys: Object.keys(menu.meals || {}),
+      dinnerDishes: menu.meals?.dinner?.dishes?.length || 0,
+    });
+
     res.status(201).json({
       success: true,
       message: 'Menu created successfully',
@@ -364,6 +372,13 @@ export const updateMenu = async (req, res) => {
 
     menu = await menu.save();
 
+    console.log('✏️ Menu updated:', {
+      _id: menu._id,
+      status: menu.status,
+      mealsKeys: Object.keys(menu.meals || {}),
+      dinnerDishes: menu.meals?.dinner?.dishes?.length || 0,
+    });
+
     res.status(200).json({
       success: true,
       message: 'Menu updated successfully',
@@ -509,9 +524,10 @@ export const voteOnMenu = async (req, res) => {
     const normalizedVoteDate = new Date(menu.menuDate);
     normalizedVoteDate.setHours(0, 0, 0, 0);
 
-    // Check if student already voted for this meal type
-    // Key: studentId + mealType (one vote per meal type)
+    // Check if student already voted for this menu and meal type
+    // Key: menuId + studentId + mealType (one vote per menu per meal)
     let existingVote = await MenuVote.findOne({
+      menuId,
       studentId: student._id,
       mealType,
     });
@@ -519,7 +535,6 @@ export const voteOnMenu = async (req, res) => {
     try {
       if (existingVote) {
         // Update existing vote
-        existingVote.menuId = menuId;
         existingVote.voteType = voteType;
         existingVote.rating = rating;
         existingVote.studentName = studentName.trim();
@@ -556,12 +571,12 @@ export const voteOnMenu = async (req, res) => {
       if (dbError.code === 11000) {
         // Race condition: another request created the vote. Update it instead.
         const raceVote = await MenuVote.findOne({
+          menuId,
           studentId: student._id,
           mealType,
         });
 
         if (raceVote) {
-          raceVote.menuId = menuId;
           raceVote.voteType = voteType;
           raceVote.rating = rating;
           raceVote.studentName = studentName.trim();
@@ -737,6 +752,16 @@ export const getTodayMenu = async (req, res) => {
       });
     }
 
+    console.log('📋 getTodayMenu - Menu found:', {
+      _id: menu._id,
+      status: menu.status,
+      mealsKeys: Object.keys(menu.meals || {}),
+      breakfastDishes: menu.meals?.breakfast?.dishes?.length || 0,
+      lunchDishes: menu.meals?.lunch?.dishes?.length || 0,
+      snacksDishes: menu.meals?.snacks?.dishes?.length || 0,
+      dinnerDishes: menu.meals?.dinner?.dishes?.length || 0,
+    });
+
     // Get voting statistics for each meal
     const votes = await MenuVote.find({ menuId: menu._id });
     const reviews = await MenuReview.find({ menuId: menu._id })
@@ -766,12 +791,22 @@ export const getTodayMenu = async (req, res) => {
       };
     });
 
+    const responseData = {
+      ...menu._doc,
+      stats: mealStats,
+    };
+
+    console.log('📤 getTodayMenu - Response structure:', {
+      hasMenus: !!responseData.meals,
+      mealsKeys: Object.keys(responseData.meals || {}),
+      dinnerExists: !!responseData.meals?.dinner,
+      dinnerDishes: responseData.meals?.dinner?.dishes?.length || 0,
+      dinnerDishesArray: responseData.meals?.dinner?.dishes,
+    });
+
     res.status(200).json({
       success: true,
-      data: {
-        ...menu._doc,
-        stats: mealStats,
-      },
+      data: responseData,
     });
   } catch (error) {
     res.status(500).json({
@@ -1019,6 +1054,100 @@ export const getVotingDetails = async (req, res) => {
   } catch (error) {
     console.error('Error getting voting details:', error);
     res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Get menu details with full stats for wardens
+ * @route   GET /api/menu/:id/details
+ * @access  Private (Warden only)
+ */
+export const getMenuDetails = async (req, res) => {
+  try {
+    if (req.user.role !== 'warden') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only wardens can view detailed menu statistics',
+      });
+    }
+
+    const { id: menuId } = req.params;
+
+    const menu = await Menu.findById(menuId).populate('createdBy', 'name email');
+
+    if (!menu) {
+      return res.status(404).json({
+        success: false,
+        message: 'Menu not found',
+      });
+    }
+
+    // Check if warden belongs to same institution
+    if (menu.institutionId.toString() !== req.user.institutionId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You cannot view this menu',
+      });
+    }
+
+    // Get all votes for this menu
+    const votes = await MenuVote.find({ menuId });
+
+    const mealTypes = ['Breakfast', 'Lunch', 'Snacks', 'Dinner'];
+    const mealStats = {};
+
+    mealTypes.forEach((mealType) => {
+      const mealVotes = votes.filter((v) => v.mealType === mealType);
+      const likes = mealVotes.filter((v) => v.voteType === 'like');
+      const dislikes = mealVotes.filter((v) => v.voteType === 'dislike');
+
+      const totalVotes = mealVotes.length;
+      const totalLikes = likes.length;
+      const totalDislikes = dislikes.length;
+
+      mealStats[mealType.toLowerCase()] = {
+        dishes: menu.meals?.[mealType.toLowerCase()]?.dishes || [],
+        stats: {
+          totalVotes,
+          totalLikes,
+          totalDislikes,
+          likePercentage: totalVotes > 0 ? Math.round((totalLikes / totalVotes) * 100) : 0,
+          dislikePercentage: totalVotes > 0 ? Math.round((totalDislikes / totalVotes) * 100) : 0,
+          averageRating: totalVotes > 0
+            ? (mealVotes.reduce((sum, v) => sum + v.rating, 0) / totalVotes).toFixed(1)
+            : 0,
+          likedBy: likes.map((vote) => ({
+            studentId: vote.studentId,
+            studentName: vote.studentName,
+            createdAt: vote.createdAt,
+          })),
+          dislikedBy: dislikes.map((vote) => ({
+            studentId: vote.studentId,
+            studentName: vote.studentName,
+            createdAt: vote.createdAt,
+          })),
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        _id: menu._id,
+        menuDate: menu.menuDate,
+        status: menu.status,
+        createdBy: menu.createdBy,
+        createdAt: menu.createdAt,
+        updatedAt: menu.updatedAt,
+        meals: mealStats,
+      },
+    });
+  } catch (error) {
+    console.error('Error getting menu details:', error);
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
