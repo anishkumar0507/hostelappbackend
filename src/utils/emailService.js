@@ -3,6 +3,16 @@ import { buildReceiptPdfBuffer } from './receiptPdf.js';
 // Note: dotenv is loaded in server.js, process.env is available globally
 
 /**
+ * Email validation helper
+ * @param {string} email - Email to validate
+ * @returns {boolean} - Whether email is valid
+ */
+const isValidEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+/**
  * Create email transporter
  * Returns null if email credentials are not configured
  */
@@ -22,8 +32,10 @@ const createTransporter = () => {
             user: process.env.EMAIL_USER,
             pass: process.env.EMAIL_PASS,
           },
+          connectionTimeout: 20000,
+          greetingTimeout: 20000,
+          socketTimeout: 20000,
           tls: {
-            // Do not reject self-signed certificates (needed for local development)
             rejectUnauthorized: false,
           },
         }
@@ -31,10 +43,12 @@ const createTransporter = () => {
           service: 'gmail',
           auth: {
             user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS, // App password for Gmail
+            pass: process.env.EMAIL_PASS,
           },
+          connectionTimeout: 20000,
+          greetingTimeout: 20000,
+          socketTimeout: 20000,
           tls: {
-            // Do not reject self-signed certificates (needed for local development)
             rejectUnauthorized: false,
           },
         };
@@ -47,19 +61,52 @@ const createTransporter = () => {
 };
 
 /**
+ * Verify email transporter connection
+ * Called once at server startup
+ */
+export const verifyEmailTransporter = async () => {
+  try {
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.warn('⚠️ Email credentials not configured. Email sending will be skipped.');
+      return false;
+    }
+
+    const transporter = createTransporter();
+    if (!transporter) {
+      console.error('❌ Failed to create email transporter. Check your email configuration.');
+      return false;
+    }
+
+    await transporter.verify();
+    console.log('✅ Email transporter verified successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Email transporter verification failed:', error.message);
+    console.error('   Check EMAIL_HOST, EMAIL_PORT, EMAIL_USER, and EMAIL_PASS in .env');
+    return false;
+  }
+};
+
+/**
  * Send temporary password email to student
  * @param {string} email - Student email
  * @param {string} name - Student name
  * @param {string} tempPassword - Temporary password
- * @returns {Promise<void>}
+ * @returns {Promise<{success: boolean, message: string}>}
  */
 export const sendTempPasswordEmail = async (email, name, tempPassword) => {
   try {
+    // Validate email format
+    if (!isValidEmail(email)) {
+      console.error('❌ Invalid email format:', email);
+      return { success: false, message: 'Invalid email address' };
+    }
+
     // Check if email credentials are configured
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       console.warn('⚠️ Email credentials not configured. Skipping email send.');
       console.log(`📝 Temporary password for ${name} (${email}): ${tempPassword}`);
-      return;
+      return { success: false, message: 'Email service not configured' };
     }
 
     // Create transporter (returns null if credentials invalid)
@@ -67,7 +114,7 @@ export const sendTempPasswordEmail = async (email, name, tempPassword) => {
     if (!transporter) {
       console.warn('⚠️ Could not create email transporter. Skipping email send.');
       console.log(`📝 Temporary password for ${name} (${email}): ${tempPassword}`);
-      return;
+      return { success: false, message: 'Email transporter creation failed' };
     }
 
     const loginUrl = process.env.FRONTEND_URL || 'http://localhost:5173/#/student/login';
@@ -159,21 +206,20 @@ This is an automated message from HostelEase Management System.
       `,
     };
 
-    // Send email (with timeout to prevent hanging)
+    // Send email with proper timeout handling
     await Promise.race([
       transporter.sendMail(mailOptions),
       new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Email send timeout')), 10000)
+        setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)
       )
     ]);
     
-    console.log(`✅ Temporary password email sent to ${email}`);
+    console.log(`✅ Temporary password email sent successfully to ${email}`);
+    return { success: true, message: 'Email sent to student' };
   } catch (error) {
-    // Log error but NEVER throw - this function must not fail
-    console.error('❌ Error sending email:', error.message || error);
-    console.log(`📝 Temporary password for ${name} (${email}): ${tempPassword}`);
-    // Explicitly return to ensure no error is thrown
-    return;
+    const errorMessage = error.message || 'Unknown email error';
+    console.error('❌ Error sending temporary password email:', errorMessage);
+    return { success: false, message: errorMessage };
   }
 };
 
@@ -183,21 +229,27 @@ This is an automated message from HostelEase Management System.
  * @param {string} name - Parent name
  * @param {string} tempPassword - Temporary password
  * @param {string} studentName - Name of the child (student) they are linked to
- * @returns {Promise<void>}
+ * @returns {Promise<{success: boolean, message: string}>}
  */
 export const sendParentTempPasswordEmail = async (email, name, tempPassword, studentName) => {
   try {
+    // Validate email format
+    if (!isValidEmail(email)) {
+      console.error('❌ Invalid email format:', email);
+      return { success: false, message: 'Invalid email address' };
+    }
+
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.warn('⚠️ Email credentials not configured. Skipping email send.');
+      console.warn('⚠️ Email credentials not configured. Skipping parent email send.');
       console.log(`📝 Parent temp password for ${name} (${email}): ${tempPassword}`);
-      return;
+      return { success: false, message: 'Email service not configured' };
     }
 
     const transporter = createTransporter();
     if (!transporter) {
-      console.warn('⚠️ Could not create email transporter. Skipping email send.');
+      console.warn('⚠️ Could not create email transporter. Skipping parent email send.');
       console.log(`📝 Parent temp password for ${name} (${email}): ${tempPassword}`);
-      return;
+      return { success: false, message: 'Email transporter creation failed' };
     }
 
     const loginUrl = (process.env.FRONTEND_URL || 'http://localhost:5173') + '/#/parent/login';
@@ -276,17 +328,23 @@ HostelEase Management System.
 
     await Promise.race([
       transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout')), 10000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
     ]);
-    console.log(`✅ Parent temp password email sent to ${email}`);
+    console.log(`✅ Parent temporary password email sent successfully to ${email}`);
+    return { success: true, message: 'Email sent to parent' };
   } catch (error) {
-    console.error('❌ Error sending parent email:', error.message || error);
-    console.log(`📝 Parent temp password for ${name} (${email}): ${tempPassword}`);
+    const errorMessage = error.message || 'Unknown email error';
+    console.error('❌ Error sending parent email:', errorMessage);
+    return { success: false, message: errorMessage };
   }
 };
 
 const formatCurrency = (value) => `INR ${Number(value || 0).toLocaleString('en-IN')}`;
 
+/**
+ * Send payment receipt email
+ * @returns {Promise<{success: boolean, message: string}>}
+ */
 export const sendPaymentReceiptEmail = async ({
   to,
   studentName,
@@ -298,15 +356,21 @@ export const sendPaymentReceiptEmail = async ({
   items = [],
 }) => {
   try {
+    // Validate email format
+    if (!isValidEmail(to)) {
+      console.error('❌ Invalid email format for receipt:', to);
+      return { success: false, message: 'Invalid email address' };
+    }
+
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       console.warn('⚠️ Email credentials not configured. Skipping receipt email.');
-      return;
+      return { success: false, message: 'Email service not configured' };
     }
 
     const transporter = createTransporter();
     if (!transporter) {
       console.warn('⚠️ Could not create email transporter. Skipping receipt email.');
-      return;
+      return { success: false, message: 'Email transporter creation failed' };
     }
 
     const pdfBuffer = await buildReceiptPdfBuffer({
@@ -343,12 +407,24 @@ export const sendPaymentReceiptEmail = async ({
       ],
     };
 
-    await transporter.sendMail(mailOptions);
+    await Promise.race([
+      transporter.sendMail(mailOptions),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
+    ]);
+
+    console.log(`✅ Payment receipt email sent successfully to ${to}`);
+    return { success: true, message: 'Receipt sent to email' };
   } catch (error) {
-    console.error('❌ Error sending payment receipt email:', error.message || error);
+    const errorMessage = error.message || 'Unknown email error';
+    console.error('❌ Error sending payment receipt email:', errorMessage);
+    return { success: false, message: errorMessage };
   }
 };
 
+/**
+ * Send payment reminder email
+ * @returns {Promise<{success: boolean, message: string}>}
+ */
 export const sendPaymentReminderEmail = async ({
   to,
   studentName,
@@ -357,15 +433,21 @@ export const sendPaymentReminderEmail = async ({
   term,
 }) => {
   try {
+    // Validate email format
+    if (!isValidEmail(to)) {
+      console.error('❌ Invalid email format for reminder:', to);
+      return { success: false, message: 'Invalid email address' };
+    }
+
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       console.warn('⚠️ Email credentials not configured. Skipping reminder email.');
-      return;
+      return { success: false, message: 'Email service not configured' };
     }
 
     const transporter = createTransporter();
     if (!transporter) {
       console.warn('⚠️ Could not create email transporter. Skipping reminder email.');
-      return;
+      return { success: false, message: 'Email transporter creation failed' };
     }
 
     const mailOptions = {
@@ -384,8 +466,16 @@ export const sendPaymentReminderEmail = async ({
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await Promise.race([
+      transporter.sendMail(mailOptions),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
+    ]);
+
+    console.log(`✅ Payment reminder email sent successfully to ${to}`);
+    return { success: true, message: 'Reminder sent to email' };
   } catch (error) {
-    console.error('❌ Error sending payment reminder email:', error.message || error);
+    const errorMessage = error.message || 'Unknown email error';
+    console.error('❌ Error sending payment reminder email:', errorMessage);
+    return { success: false, message: errorMessage };
   }
 };

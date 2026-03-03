@@ -287,6 +287,8 @@ export const verifyRazorpayPayment = async (req, res) => {
       sendPaymentReceiptEmail({
         to: student.userId.email,
         ...receiptPayload,
+      }).catch((err) => {
+        console.error('❌ Failed to send receipt to student:', err.message || err);
       });
     }
 
@@ -294,6 +296,8 @@ export const verifyRazorpayPayment = async (req, res) => {
       sendPaymentReceiptEmail({
         to: parent.userId.email,
         ...receiptPayload,
+      }).catch((err) => {
+        console.error('❌ Failed to send receipt to parent:', err.message || err);
       });
     }
 
@@ -515,11 +519,15 @@ export const payMyFees = async (req, res) => {
     };
 
     if (student.userId?.email) {
-      sendPaymentReceiptEmail({ to: student.userId.email, ...receiptPayload });
+      sendPaymentReceiptEmail({ to: student.userId.email, ...receiptPayload }).catch((err) => {
+        console.error('❌ Failed to send receipt to student:', err.message || err);
+      });
     }
 
     if (parent?.userId?.email) {
-      sendPaymentReceiptEmail({ to: parent.userId.email, ...receiptPayload });
+      sendPaymentReceiptEmail({ to: parent.userId.email, ...receiptPayload }).catch((err) => {
+        console.error('❌ Failed to send receipt to parent:', err.message || err);
+      });
     }
 
     const updatedFees = await Fee.find({ studentId: student._id, institutionId: req.user.institutionId }).sort({ createdAt: -1 });

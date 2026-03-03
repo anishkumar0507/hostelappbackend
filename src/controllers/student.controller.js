@@ -417,6 +417,9 @@ export const createStudent = async (req, res) => {
           method: admissionMethod,
           receiptNumber,
           items: [{ term: admissionTerm, amount: admissionAmount }],
+        }).catch((err) => {
+          // Log error but don't fail student creation
+          console.error('❌ Failed to send admission receipt email:', err.message || err);
         });
 
         if (guardianEmail) {
@@ -429,6 +432,9 @@ export const createStudent = async (req, res) => {
             method: admissionMethod,
             receiptNumber,
             items: [{ term: admissionTerm, amount: admissionAmount }],
+          }).catch((err) => {
+            // Log error but don't fail student creation
+            console.error('❌ Failed to send guardian admission receipt email:', err.message || err);
           });
         }
       }
@@ -452,19 +458,21 @@ export const createStudent = async (req, res) => {
     const populatedStudent = await Student.findById(student._id)
       .populate('userId', 'name email role');
 
-    // Send temporary password email (completely non-blocking - fire and forget)
-    // This runs asynchronously and will NOT affect the API response
+    // Send temporary password email (fire and forget but log results)
     sendTempPasswordEmail(normalizedEmail, name.trim(), tempPassword)
-      .then(() => {
-        console.log(`✅ Temporary password email sent to ${normalizedEmail}`);
+      .then((result) => {
+        if (result.success) {
+          console.log(`✅ Temporary password email sent to ${normalizedEmail}`);
+        } else {
+          console.error('❌ Failed to send email:', result.message);
+          console.log(`📝 Temporary password for ${name.trim()} (${normalizedEmail}): ${tempPassword}`);
+        }
       })
       .catch((emailError) => {
-        // Log email error but don't fail student creation
-        console.error('❌ Failed to send email (student account still created):', emailError.message || emailError);
+        console.error('❌ Failed to send email:', emailError.message || emailError);
         console.log(`📝 Temporary password for ${name.trim()} (${normalizedEmail}): ${tempPassword}`);
       });
 
-    // Return success response immediately - email sending happens in background
     // If guardian info present, create guardian user and Parent link
     if (guardianEmail) {
       try {
@@ -484,8 +492,17 @@ export const createStudent = async (req, res) => {
 
           // send temp password email to guardian
           sendTempPasswordEmail(normalizedGEmail, guardianName || 'Guardian', guardianTempPassword)
-            .then(() => console.log(`✅ Guardian temp password email sent to ${normalizedGEmail}`))
-            .catch((err) => console.error('❌ Failed to send guardian email:', err.message || err));
+            .then((result) => {
+              if (result.success) {
+                console.log(`✅ Guardian temp password email sent to ${normalizedGEmail}`);
+              } else {
+                console.error('❌ Failed to send guardian email:', result.message);
+                console.log(`📝 Guardian temp password (${normalizedGEmail}): ${guardianTempPassword}`);
+              }
+            })
+            .catch((err) => {
+              console.error('❌ Failed to send guardian email:', err.message || err);
+            });
         }
 
         // Ensure Parent document exists linking guardianUser to student
@@ -659,7 +676,13 @@ export const updateStudent = async (req, res) => {
             institutionId: req.user.institutionId,
           });
           sendTempPasswordEmail(normalizedGEmail, guardianName || 'Guardian', guardianTempPassword)
-            .then(() => console.log(`✅ Guardian temp password email sent to ${normalizedGEmail}`))
+            .then((result) => {
+              if (result.success) {
+                console.log(`✅ Guardian temp password email sent to ${normalizedGEmail}`);
+              } else {
+                console.error('❌ Failed to send guardian email:', result.message);
+              }
+            })
             .catch((err) => console.error('❌ Failed to send guardian email:', err.message || err));
         }
 

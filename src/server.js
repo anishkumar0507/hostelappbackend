@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { schedulePaymentReminders } from './utils/paymentReminders.js';
+import { verifyEmailTransporter } from './utils/emailService.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -32,6 +33,9 @@ connectDB().then(async () => {
     console.log(`🚀 Server running in ${process.env.NODE_ENV || 'development'} mode on http://0.0.0.0:${PORT}`);
     console.log(`✅ Listening on http://localhost:${PORT}`);
   });
+
+  // Verify email transporter connection at startup
+  await verifyEmailTransporter();
 
   schedulePaymentReminders();
 

@@ -107,8 +107,18 @@ export const registerParent = async (req, res) => {
       tempPassword,
       student.userId?.name || 'Your child'
     )
-      .then(() => console.log(`✅ Parent temp password email sent to ${normalizedEmail}`))
-      .catch((err) => console.error('❌ Parent email error:', err.message));
+      .then((result) => {
+        if (result.success) {
+          console.log(`✅ Parent temp password email sent to ${normalizedEmail}`);
+        } else {
+          console.error('❌ Parent email error:', result.message);
+          console.log(`📝 Temp password for parent (${normalizedEmail}): ${tempPassword}`);
+        }
+      })
+      .catch((err) => {
+        console.error('❌ Parent email error:', err.message || err);
+        console.log(`📝 Temp password for parent (${normalizedEmail}): ${tempPassword}`);
+      });
 
     res.status(201).json({
       success: true,
