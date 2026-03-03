@@ -1,8 +1,6 @@
-import nodemailer from 'nodemailer';
+import axios from 'axios';
 import { buildReceiptPdfBuffer } from './receiptPdf.js';
 // Note: dotenv is loaded in server.js, process.env is available globally
-
-let emailServiceEnabled = false;
 
 /**
  * Email validation helper
@@ -15,133 +13,75 @@ const isValidEmail = (email) => {
 };
 
 /**
- * Create email transporter with DEBUG LOGGING
- * Returns null if email credentials are not configured
+ * Core email sending function using Brevo REST API
+ * @param {string} to - Recipient email address
+ * @param {string} subject - Email subject
+ * @param {string} html - HTML email content
+ * @returns {Promise<{success: boolean, message: string}>}
  */
-const createTransporter = () => {
+const sendEmail = async (to, subject, html) => {
   try {
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.log('📧 EMAIL_USER or EMAIL_PASS not configured');
-      return null;
+    // Validate API key
+    if (!process.env.BREVO_API_KEY) {
+      console.warn('⚠️ BREVO_API_KEY not configured');
+      return { success: false, message: 'Email service not configured' };
     }
 
-    console.log('📧 Creating email transporter...');
-    
-    // Brevo SMTP configuration
-    const host = process.env.EMAIL_HOST || 'smtp-relay.brevo.com';
-    const port = parseInt(process.env.EMAIL_PORT || 587, 10);
-    const secure = port === 465; // true for 465, false for 587 and others
-    
-    console.log(`   Host: ${host}`);
-    console.log(`   Port: ${port}`);
-    console.log(`   Secure (TLS): ${secure}`);
-    console.log(`   Auth User: ${process.env.EMAIL_USER ? '✓ configured' : '✗ missing'}`);
+    // Validate sender email
+    if (!process.env.EMAIL_USER) {
+      console.warn('⚠️ EMAIL_USER not configured');
+      return { success: false, message: 'Email sender not configured' };
+    }
 
-    const transporterConfig = {
-      host,
-      port,
-      secure,
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+    // Validate recipient
+    if (!isValidEmail(to)) {
+      console.error('❌ Invalid recipient email:', to);
+      return { success: false, message: 'Invalid recipient email' };
+    }
+
+    console.log(`📧 Sending email to ${to} via Brevo API...`);
+
+    // Call Brevo SMTP Email API
+    const response = await axios.post(
+      'https://api.brevo.com/v3/smtp/email',
+      {
+        sender: { 
+          email: process.env.EMAIL_USER,
+          name: 'HostelEase' 
+        },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
       },
-      connectionTimeout: 20000,
-      greetingTimeout: 20000,
-      socketTimeout: 20000,
-      logger: process.env.NODE_ENV === 'development',
-      debug: process.env.NODE_ENV === 'development',
-      tls: {
-        rejectUnauthorized: false,
-        minVersion: 'TLSv1.2',
-      },
-    };
-
-    return nodemailer.createTransport(transporterConfig);
-  } catch (error) {
-    console.error('❌ Error creating email transporter:', error.message);
-    return null;
-  }
-};
-
-/**
- * Verify email transporter connection at server startup
- * Non-blocking: server continues even if email verification fails
- */
-export const verifyEmailTransporter = async () => {
-  try {
-    console.log('\n📧 Email Service Verification Starting...');
-    
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.warn('⚠️  Email credentials not configured in .env');
-      console.warn('    Email sending will be DISABLED');
-      console.warn('    Set EMAIL_USER and EMAIL_PASS to enable email service');
-      emailServiceEnabled = false;
-      return false;
-    }
-
-    const transporter = createTransporter();
-    if (!transporter) {
-      console.error('❌ Failed to create email transporter instance');
-      emailServiceEnabled = false;
-      return false;
-    }
-
-    console.log('📧 Attempting to verify transporter connection...');
-    
-    // Attempt verification with 15-second timeout
-    const verifyPromise = transporter.verify();
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Verification timeout (15s)')), 15000)
+      {
+        headers: {
+          'api-key': process.env.BREVO_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        timeout: 20000, // 20 second timeout
+      }
     );
 
-    await Promise.race([verifyPromise, timeoutPromise]);
-    
-    console.log('✅ Email transporter verified successfully');
-    console.log('   Server is ready to send emails\n');
-    emailServiceEnabled = true;
-    return true;
-    
+    console.log(`✅ Email sent successfully to ${to}`);
+    return { success: true, message: 'Email sent successfully' };
   } catch (error) {
-    const errorMsg = error.message || error.toString();
-    console.error('\n❌ Email transporter verification FAILED');
-    console.error(`   Error: ${errorMsg}`);
-    console.error('\n   Possible causes:');
+    const errorMsg = error.message || 'Unknown email error';
+    console.error(`❌ Error sending email to ${to}:`, errorMsg);
     
-    if (errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
-      console.error('   → Network firewall blocking SMTP port');
-      console.error('   → SMTP server not responding');
-      console.error('   → Check EMAIL_HOST and EMAIL_PORT in .env');
+    // Provide diagnostics
+    if (error.response?.status === 401) {
+      console.error('   → BREVO_API_KEY is invalid or expired');
+    } else if (error.response?.status === 400) {
+      console.error('   → Invalid email format or request body');
+    } else if (error.code === 'ECONNABORTED') {
+      console.error('   → Request timeout (20s) - Brevo API not responding');
+    } else if (error.code?.includes('ENOTFOUND')) {
+      console.error('   → Cannot reach Brevo API endpoint');
     }
-    if (errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo')) {
-      console.error('   → EMAIL_HOST value is incorrect or unreachable');
-      console.error('   → Current host: ' + process.env.EMAIL_HOST);
-    }
-    if (errorMsg.includes('Invalid login') || errorMsg.includes('authentication')) {
-      console.error('   → EMAIL_USER or EMAIL_PASS is incorrect');
-      console.error('   → For Brevo: Verify SMTP credentials from account settings');
-    }
-    if (errorMsg.includes('STARTTLS')) {
-      console.error('   → TLS/SSL configuration mismatch with port');
-      console.error('   → Port 587 requires secure: false');
-      console.error('   → Port 465 requires secure: true');
-    }
-    
-    console.error('\n   Verification checklist:');
-    console.error('   1. EMAIL_HOST is set and correct');
-    console.error('   2. EMAIL_PORT matches host requirements (587 or 465)');
-    console.error('   3. EMAIL_USER and EMAIL_PASS are valid');
-    console.error('   4. Check firewall/network allows outbound SMTP');
-    console.error('\n');
-    
-    emailServiceEnabled = false;
-    return false;
+
+    return { success: false, message: errorMsg };
   }
 };
-
-/**
- * Check if email service is enabled
- */
-export const isEmailServiceEnabled = () => emailServiceEnabled;
 
 /**
  * Send temporary password email to student
@@ -158,130 +98,73 @@ export const sendTempPasswordEmail = async (email, name, tempPassword) => {
       return { success: false, message: 'Invalid email address' };
     }
 
-    // Check if email service is enabled
-    if (!emailServiceEnabled) {
-      console.warn('⚠️ Email service is disabled. Skipping email send.');
-      console.log(`📝 Temporary password for ${name} (${email}): ${tempPassword}`);
-      return { success: false, message: 'Email service disabled' };
-    }
-
-    // Check if email credentials are configured
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.warn('⚠️ Email credentials not configured. Skipping email send.');
-      console.log(`📝 Temporary password for ${name} (${email}): ${tempPassword}`);
-      return { success: false, message: 'Email service not configured' };
-    }
-
-    // Create transporter
-    const transporter = createTransporter();
-    if (!transporter) {
-      console.warn('⚠️ Could not create email transporter. Skipping email send.');
-      console.log(`📝 Temporary password for ${name} (${email}): ${tempPassword}`);
-      return { success: false, message: 'Email transporter creation failed' };
-    }
-
     const loginUrl = process.env.FRONTEND_URL || 'http://localhost:5173/#/student/login';
 
-    const mailOptions = {
-      from: `"HostelEase" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Your Temporary HostelEase Login Password',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-            .content { background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }
-            .password-box { background: white; border: 2px dashed #4f46e5; padding: 20px; margin: 20px 0; text-align: center; border-radius: 8px; }
-            .password { font-size: 24px; font-weight: bold; color: #4f46e5; letter-spacing: 2px; font-family: monospace; }
-            .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 4px; }
-            .button { display: inline-block; background: #4f46e5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
-            .footer { text-align: center; margin-top: 30px; color: #64748b; font-size: 12px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>Welcome to HostelEase</h1>
-            </div>
-            <div class="content">
-              <p>Dear ${name},</p>
-              
-              <p>Your student account has been created in the HostelEase system. Please use the temporary password below to log in for the first time.</p>
-              
-              <div class="password-box">
-                <p style="margin: 0 0 10px 0; color: #64748b; font-size: 14px;">Your Temporary Password:</p>
-                <div class="password">${tempPassword}</div>
-              </div>
-              
-              <div class="warning">
-                <strong>⚠️ Important:</strong> This is a one-time temporary password. You <strong>must</strong> change your password immediately after your first login for security reasons.
-              </div>
-              
-              <p><strong>Login Instructions:</strong></p>
-              <ol>
-                <li>Go to the login page: <a href="${loginUrl}">${loginUrl}</a></li>
-                <li>Enter your email: <strong>${email}</strong></li>
-                <li>Enter the temporary password shown above</li>
-                <li>After logging in, you will be prompted to set a new password</li>
-              </ol>
-              
-              <p style="text-align: center;">
-                <a href="${loginUrl}" class="button">Login to HostelEase</a>
-              </p>
-              
-              <p style="color: #64748b; font-size: 14px; margin-top: 30px;">
-                <strong>Security Note:</strong> Never share your password with anyone. If you did not request this account, please contact your warden immediately.
-              </p>
-            </div>
-            <div class="footer">
-              <p>This is an automated message from HostelEase Management System.</p>
-              <p>Please do not reply to this email.</p>
-            </div>
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }
+          .password-box { background: white; border: 2px dashed #4f46e5; padding: 20px; margin: 20px 0; text-align: center; border-radius: 8px; }
+          .password { font-size: 24px; font-weight: bold; color: #4f46e5; letter-spacing: 2px; font-family: monospace; }
+          .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 4px; }
+          .button { display: inline-block; background: #4f46e5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+          .footer { text-align: center; margin-top: 30px; color: #64748b; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Welcome to HostelEase</h1>
           </div>
-        </body>
-        </html>
-      `,
-      text: `
-Welcome to HostelEase
+          <div class="content">
+            <p>Dear ${name},</p>
+            
+            <p>Your student account has been created in the HostelEase system. Please use the temporary password below to log in for the first time.</p>
+            
+            <div class="password-box">
+              <p style="margin: 0 0 10px 0; color: #64748b; font-size: 14px;">Your Temporary Password:</p>
+              <div class="password">${tempPassword}</div>
+            </div>
+            
+            <div class="warning">
+              <strong>⚠️ Important:</strong> This is a one-time temporary password. You <strong>must</strong> change your password immediately after your first login for security reasons.
+            </div>
+            
+            <p><strong>Login Instructions:</strong></p>
+            <ol>
+              <li>Go to the login page: <a href="${loginUrl}">${loginUrl}</a></li>
+              <li>Enter your email: <strong>${email}</strong></li>
+              <li>Enter the temporary password shown above</li>
+              <li>After logging in, you will be prompted to set a new password</li>
+            </ol>
+            
+            <p style="text-align: center;">
+              <a href="${loginUrl}" class="button">Login to HostelEase</a>
+            </p>
+            
+            <p style="color: #64748b; font-size: 14px; margin-top: 30px;">
+              <strong>Security Note:</strong> Never share your password with anyone. If you did not request this account, please contact your warden immediately.
+            </p>
+          </div>
+          <div class="footer">
+            <p>This is an automated message from HostelEase Management System.</p>
+            <p>Please do not reply to this email.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
 
-Dear ${name},
-
-Your student account has been created in the HostelEase system. Please use the temporary password below to log in for the first time.
-
-Your Temporary Password: ${tempPassword}
-
-⚠️ IMPORTANT: This is a one-time temporary password. You MUST change your password immediately after your first login for security reasons.
-
-Login Instructions:
-1. Go to the login page: ${loginUrl}
-2. Enter your email: ${email}
-3. Enter the temporary password shown above
-4. After logging in, you will be prompted to set a new password
-
-Security Note: Never share your password with anyone. If you did not request this account, please contact your warden immediately.
-
-This is an automated message from HostelEase Management System.
-      `,
-    };
-
-    // Send email with proper timeout handling
-    await Promise.race([
-      transporter.sendMail(mailOptions),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)
-      )
-    ]);
-    
-    console.log(`✅ Temporary password email sent successfully to ${email}`);
-    return { success: true, message: 'Email sent to student' };
+    return await sendEmail(email, 'Your Temporary HostelEase Login Password', html);
   } catch (error) {
     const errorMessage = error.message || 'Unknown email error';
-    console.error('❌ Error sending temporary password email:', errorMessage);
+    console.error('❌ Error in sendTempPasswordEmail:', errorMessage);
     return { success: false, message: errorMessage };
   }
 };
@@ -302,109 +185,63 @@ export const sendParentTempPasswordEmail = async (email, name, tempPassword, stu
       return { success: false, message: 'Invalid email address' };
     }
 
-    // Check if email service is enabled
-    if (!emailServiceEnabled) {
-      console.warn('⚠️ Email service is disabled. Skipping email send.');
-      console.log(`📝 Parent temp password for ${name} (${email}): ${tempPassword}`);
-      return { success: false, message: 'Email service disabled' };
-    }
-
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.warn('⚠️ Email credentials not configured. Skipping parent email send.');
-      console.log(`📝 Parent temp password for ${name} (${email}): ${tempPassword}`);
-      return { success: false, message: 'Email service not configured' };
-    }
-
-    const transporter = createTransporter();
-    if (!transporter) {
-      console.warn('⚠️ Could not create email transporter. Skipping parent email send.');
-      console.log(`📝 Parent temp password for ${name} (${email}): ${tempPassword}`);
-      return { success: false, message: 'Email transporter creation failed' };
-    }
-
     const loginUrl = (process.env.FRONTEND_URL || 'http://localhost:5173') + '/#/parent/login';
 
-    const mailOptions = {
-      from: `"HostelEase" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Your HostelEase Parent Portal Access',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #059669 0%, #047857 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
-            .content { background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }
-            .password-box { background: white; border: 2px dashed #059669; padding: 20px; margin: 20px 0; text-align: center; border-radius: 8px; }
-            .password { font-size: 24px; font-weight: bold; color: #059669; letter-spacing: 2px; font-family: monospace; }
-            .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 4px; }
-            .button { display: inline-block; background: #059669; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
-            .footer { text-align: center; margin-top: 30px; color: #64748b; font-size: 12px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h1>HostelEase Parent Portal</h1>
-            </div>
-            <div class="content">
-              <p>Dear ${name},</p>
-              
-              <p>You have been registered as a parent/guardian for <strong>${studentName}</strong> in the HostelEase system. Use the temporary password below to log in and view your child's hostel information.</p>
-              
-              <div class="password-box">
-                <p style="margin: 0 0 10px 0; color: #64748b; font-size: 14px;">Your Temporary Password:</p>
-                <div class="password">${tempPassword}</div>
-              </div>
-              
-              <div class="warning">
-                <strong>⚠️ Important:</strong> You <strong>must</strong> change your password on first login for security.
-              </div>
-              
-              <p><strong>Login:</strong> <a href="${loginUrl}">${loginUrl}</a></p>
-              <p>Email: <strong>${email}</strong></p>
-              
-              <p style="text-align: center;">
-                <a href="${loginUrl}" class="button">Access Parent Portal</a>
-              </p>
-            </div>
-            <div class="footer">
-              <p>HostelEase Management System - Parent Portal</p>
-            </div>
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #059669 0%, #047857 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }
+          .password-box { background: white; border: 2px dashed #059669; padding: 20px; margin: 20px 0; text-align: center; border-radius: 8px; }
+          .password { font-size: 24px; font-weight: bold; color: #059669; letter-spacing: 2px; font-family: monospace; }
+          .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0; border-radius: 4px; }
+          .button { display: inline-block; background: #059669; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+          .footer { text-align: center; margin-top: 30px; color: #64748b; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>HostelEase Parent Portal</h1>
           </div>
-        </body>
-        </html>
-      `,
-      text: `
-HostelEase Parent Portal
+          <div class="content">
+            <p>Dear ${name},</p>
+            
+            <p>You have been registered as a parent/guardian for <strong>${studentName}</strong> in the HostelEase system. Use the temporary password below to log in and view your child's hostel information.</p>
+            
+            <div class="password-box">
+              <p style="margin: 0 0 10px 0; color: #64748b; font-size: 14px;">Your Temporary Password:</p>
+              <div class="password">${tempPassword}</div>
+            </div>
+            
+            <div class="warning">
+              <strong>⚠️ Important:</strong> You <strong>must</strong> change your password on first login for security.
+            </div>
+            
+            <p><strong>Login:</strong> <a href="${loginUrl}">${loginUrl}</a></p>
+            <p>Email: <strong>${email}</strong></p>
+            
+            <p style="text-align: center;">
+              <a href="${loginUrl}" class="button">Access Parent Portal</a>
+            </p>
+          </div>
+          <div class="footer">
+            <p>HostelEase Management System - Parent Portal</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
 
-Dear ${name},
-
-You have been registered as a parent/guardian for ${studentName}. Use the temporary password below to log in.
-
-Temporary Password: ${tempPassword}
-
-⚠️ Change your password on first login.
-
-Login: ${loginUrl}
-Email: ${email}
-
-HostelEase Management System.
-      `,
-    };
-
-    await Promise.race([
-      transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
-    ]);
-    console.log(`✅ Parent temporary password email sent successfully to ${email}`);
-    return { success: true, message: 'Email sent to parent' };
+    return await sendEmail(email, 'Your HostelEase Parent Portal Access', html);
   } catch (error) {
     const errorMessage = error.message || 'Unknown email error';
-    console.error('❌ Error sending parent email:', errorMessage);
+    console.error('❌ Error in sendParentTempPasswordEmail:', errorMessage);
     return { success: false, message: errorMessage };
   }
 };
@@ -432,67 +269,60 @@ export const sendPaymentReceiptEmail = async ({
       return { success: false, message: 'Invalid email address' };
     }
 
-    // Check if email service is enabled
-    if (!emailServiceEnabled) {
-      console.warn('⚠️ Email service is disabled. Skipping receipt email.');
-      return { success: false, message: 'Email service disabled' };
-    }
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #7c3aed 0%, #ec4899 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }
+          .receipt-box { background: white; border: 1px solid #e2e8f0; padding: 20px; margin: 20px 0; border-radius: 8px; }
+          .footer { text-align: center; margin-top: 30px; color: #64748b; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Payment Receipt</h1>
+          </div>
+          <div class="content">
+            <p>Hi ${studentName || 'Student'},</p>
+            <p>Your payment has been received successfully.</p>
+            
+            <div class="receipt-box">
+              <ul style="list-style: none; padding: 0;">
+                <li style="padding: 10px 0; border-bottom: 1px solid #e2e8f0;">
+                  <strong>Amount:</strong> ${formatCurrency(amount)}
+                </li>
+                <li style="padding: 10px 0; border-bottom: 1px solid #e2e8f0;">
+                  <strong>Receipt:</strong> ${receiptNumber || 'N/A'}
+                </li>
+                <li style="padding: 10px 0; border-bottom: 1px solid #e2e8f0;">
+                  <strong>Paid On:</strong> ${paidAt ? new Date(paidAt).toLocaleString('en-IN') : 'N/A'}
+                </li>
+                <li style="padding: 10px 0;">
+                  <strong>Method:</strong> ${method || 'N/A'}
+                </li>
+              </ul>
+            </div>
+            
+            <p>Thank you for your payment. If you have any questions, please contact the hostel administration.</p>
+          </div>
+          <div class="footer">
+            <p>HostelEase Management System</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
 
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.warn('⚠️ Email credentials not configured. Skipping receipt email.');
-      return { success: false, message: 'Email service not configured' };
-    }
-
-    const transporter = createTransporter();
-    if (!transporter) {
-      console.warn('⚠️ Could not create email transporter. Skipping receipt email.');
-      return { success: false, message: 'Email transporter creation failed' };
-    }
-
-    const pdfBuffer = await buildReceiptPdfBuffer({
-      receiptNumber,
-      studentName,
-      studentEmail,
-      amount,
-      paidAt,
-      method,
-      items,
-    });
-
-    const mailOptions = {
-      from: `"HostelEase" <${process.env.EMAIL_USER}>`,
-      to,
-      subject: `Payment Receipt - ${receiptNumber || 'HostelEase'}`,
-      html: `
-        <p>Hi ${studentName || 'Student'},</p>
-        <p>Your payment has been received successfully.</p>
-        <ul>
-          <li><strong>Amount:</strong> ${formatCurrency(amount)}</li>
-          <li><strong>Receipt:</strong> ${receiptNumber || 'N/A'}</li>
-          <li><strong>Paid On:</strong> ${paidAt ? new Date(paidAt).toLocaleString('en-IN') : 'N/A'}</li>
-          <li><strong>Method:</strong> ${method || 'N/A'}</li>
-        </ul>
-        <p>Your receipt is attached as a PDF.</p>
-      `,
-      attachments: [
-        {
-          filename: `Receipt-${receiptNumber || 'HostelEase'}.pdf`,
-          content: pdfBuffer,
-          contentType: 'application/pdf',
-        },
-      ],
-    };
-
-    await Promise.race([
-      transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
-    ]);
-
-    console.log(`✅ Payment receipt email sent successfully to ${to}`);
-    return { success: true, message: 'Receipt sent to email' };
+    return await sendEmail(to, `Payment Receipt - ${receiptNumber || 'HostelEase'}`, html);
   } catch (error) {
     const errorMessage = error.message || 'Unknown email error';
-    console.error('❌ Error sending payment receipt email:', errorMessage);
+    console.error('❌ Error in sendPaymentReceiptEmail:', errorMessage);
     return { success: false, message: errorMessage };
   }
 };
@@ -515,49 +345,52 @@ export const sendPaymentReminderEmail = async ({
       return { success: false, message: 'Invalid email address' };
     }
 
-    // Check if email service is enabled
-    if (!emailServiceEnabled) {
-      console.warn('⚠️ Email service is disabled. Skipping reminder email.');
-      return { success: false, message: 'Email service disabled' };
-    }
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .content { background: #f8fafc; padding: 30px; border-radius: 0 0 10px 10px; }
+          .reminder-box { background: #fef3c7; border: 2px dashed #d97706; padding: 20px; margin: 20px 0; border-radius: 8px; }
+          .footer { text-align: center; margin-top: 30px; color: #64748b; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Payment Reminder</h1>
+          </div>
+          <div class="content">
+            <p>Hi ${studentName || 'Student'},</p>
+            <p>This is a reminder that your hostel payment is due soon.</p>
+            
+            <div class="reminder-box">
+              <ul style="list-style: none; padding: 0; margin: 0;">
+                <li style="padding: 10px 0;"><strong>Term:</strong> ${term || 'Hostel Fee'}</li>
+                <li style="padding: 10px 0;"><strong>Amount:</strong> ${formatCurrency(amount)}</li>
+                <li style="padding: 10px 0;"><strong>Due Date:</strong> ${dueDate ? new Date(dueDate).toLocaleDateString('en-IN') : 'N/A'}</li>
+              </ul>
+            </div>
+            
+            <p>Please make the payment before the due date to avoid late fees.</p>
+          </div>
+          <div class="footer">
+            <p>HostelEase Management System</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
 
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.warn('⚠️ Email credentials not configured. Skipping reminder email.');
-      return { success: false, message: 'Email service not configured' };
-    }
-
-    const transporter = createTransporter();
-    if (!transporter) {
-      console.warn('⚠️ Could not create email transporter. Skipping reminder email.');
-      return { success: false, message: 'Email transporter creation failed' };
-    }
-
-    const mailOptions = {
-      from: `"HostelEase" <${process.env.EMAIL_USER}>`,
-      to,
-      subject: 'Upcoming Hostel Payment Due',
-      html: `
-        <p>Hi ${studentName || 'Student'},</p>
-        <p>This is a reminder that your hostel payment is due soon.</p>
-        <ul>
-          <li><strong>Term:</strong> ${term || 'Hostel Fee'}</li>
-          <li><strong>Amount:</strong> ${formatCurrency(amount)}</li>
-          <li><strong>Due Date:</strong> ${dueDate ? new Date(dueDate).toLocaleDateString('en-IN') : 'N/A'}</li>
-        </ul>
-        <p>Please make the payment before the due date to avoid late fees.</p>
-      `,
-    };
-
-    await Promise.race([
-      transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
-    ]);
-
-    console.log(`✅ Payment reminder email sent successfully to ${to}`);
-    return { success: true, message: 'Reminder sent to email' };
+    return await sendEmail(to, 'Upcoming Hostel Payment Due', html);
   } catch (error) {
     const errorMessage = error.message || 'Unknown email error';
-    console.error('❌ Error sending payment reminder email:', errorMessage);
+    console.error('❌ Error in sendPaymentReminderEmail:', errorMessage);
     return { success: false, message: errorMessage };
   }
 };
+

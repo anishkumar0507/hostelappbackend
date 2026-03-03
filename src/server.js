@@ -4,7 +4,6 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { schedulePaymentReminders } from './utils/paymentReminders.js';
-import { verifyEmailTransporter } from './utils/emailService.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -25,6 +24,13 @@ if (process.env.MONGO_URI) {
   process.exit(1);
 }
 
+// Verify Brevo API configuration
+if (process.env.BREVO_API_KEY) {
+  console.log('✅ BREVO_API_KEY loaded successfully');
+} else {
+  console.warn('⚠️  BREVO_API_KEY not configured - email service will be disabled');
+}
+
 // Connect to database and start server
 connectDB().then(async () => {
   const PORT = process.env.PORT || 5000;
@@ -32,11 +38,6 @@ connectDB().then(async () => {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running in ${process.env.NODE_ENV || 'development'} mode on http://0.0.0.0:${PORT}`);
     console.log(`✅ Listening on http://localhost:${PORT}`);
-  });
-
-  // Verify email transporter at startup (non-blocking - doesn't prevent server from starting)
-  verifyEmailTransporter().catch((err) => {
-    console.error('⚠️ Email verification error (server will continue):', err.message || err);
   });
 
   schedulePaymentReminders();
