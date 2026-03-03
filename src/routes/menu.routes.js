@@ -1,5 +1,6 @@
 import express from 'express';
 import {
+  getPolls,
   createMenu,
   getMenus,
   getMenuById,
@@ -12,8 +13,17 @@ import {
   addReview,
   getReviews,
   publishMenu,
+  getVotingDetails,
 } from '../controllers/menu.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
+import { authorize } from '../middleware/role.middleware.js';
+import {
+  createPoll,
+  getPollDetails,
+  votePoll,
+  closePoll,
+  deletePoll,
+} from '../controllers/poll.controller.js';
 
 const router = express.Router();
 
@@ -29,6 +39,14 @@ router.post('/', createMenu);
 // Get all menus (with filters)
 router.get('/', getMenus);
 
+// Poll routes (must be above '/:id' to avoid route conflicts)
+router.get('/poll', getPolls);
+router.post('/poll', authorize('warden'), createPoll);
+router.get('/poll/:id/details', getPollDetails);
+router.post('/poll/:id/vote', votePoll);
+router.put('/poll/:id/close', authorize('warden'), closePoll);
+router.delete('/poll/:id', authorize('warden'), deletePoll);
+
 // Get single menu with stats
 router.get('/:id', getMenuById);
 
@@ -43,6 +61,9 @@ router.post('/:id/vote', voteOnMenu);
 
 // Student - Add review for a meal
 router.post('/:id/review', addReview);
+
+// Get voting details
+router.get('/:id/voting-details', getVotingDetails);
 
 // Get reviews for a menu meal
 router.get('/:id/reviews', getReviews);

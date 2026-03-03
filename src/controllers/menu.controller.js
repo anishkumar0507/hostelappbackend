@@ -2,6 +2,122 @@ import Menu from '../models/Menu.model.js';
 import MenuVote from '../models/MenuVote.model.js';
 import MenuReview from '../models/MenuReview.model.js';
 import Student from '../models/Student.model.js';
+import Poll from '../models/Poll.model.js';
+import PollVote from '../models/PollVote.model.js';
+
+/**
+ * @desc    Get poll summary and poll list under menu namespace
+ * @route   GET /api/menu/poll?status=
+ * @access  Private
+ */
+export const getPolls = async (req, res) => {
+  try {
+    const { status } = req.query;
+
+    const menuFilter = {
+      institutionId: req.user.institutionId,
+    };
+
+    if (status) {
+      menuFilter.status = status === 'active' ? 'published' : status;
+    }
+
+    const menus = await Menu.find(menuFilter).select('_id').lean();
+    const menuIds = menus.map((menu) => menu._id);
+
+    const voteFilter = {
+      institutionId: req.user.institutionId,
+    };
+
+    if (menuIds.length > 0) {
+      voteFilter.menuId = { $in: menuIds };
+    }
+
+    const votes = await MenuVote.find(voteFilter)
+      .populate('studentId', 'firstName lastName rollNo')
+      .lean();
+
+    const likedVotes = votes.filter((vote) => vote.voteType === 'like');
+    const dislikedVotes = votes.filter((vote) => vote.voteType === 'dislike');
+
+    const toStudentSummary = (vote) => ({
+      studentId: vote.studentId?._id || vote.studentId || null,
+      studentName:
+        `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
+        vote.studentId?.rollNo ||
+        'Unknown Student',
+    });
+
+    const likedBy = likedVotes.map(toStudentSummary);
+    const dislikedBy = dislikedVotes.map(toStudentSummary);
+
+    const totalLikes = likedBy.length;
+    const totalDislikes = dislikedBy.length;
+    const totalVotes = totalLikes + totalDislikes;
+    const likePercentage = totalVotes > 0 ? Math.round((totalLikes / totalVotes) * 100) : 0;
+    const dislikePercentage = totalVotes > 0 ? Math.round((totalDislikes / totalVotes) * 100) : 0;
+
+    const pollFilter = {
+      institutionId: req.user.institutionId,
+    };
+    if (status) {
+      pollFilter.status = status;
+    }
+
+    const polls = await Poll.find(pollFilter)
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const pollIds = polls.map((poll) => poll._id);
+    const pollVotes = pollIds.length
+      ? await PollVote.find({ pollId: { $in: pollIds } }).lean()
+      : [];
+
+    const pollsWithVotes = polls.map((poll) => {
+      const votesForPoll = pollVotes.filter((vote) => String(vote.pollId) === String(poll._id));
+
+      const optionVotes = {};
+      (poll.options || []).forEach((option) => {
+        optionVotes[option.id] = {
+          count: votesForPoll.filter((vote) => vote.optionId === option.id).length,
+          percentage: 0,
+        };
+      });
+
+      const pollTotalVotes = votesForPoll.length;
+      Object.keys(optionVotes).forEach((optionId) => {
+        optionVotes[optionId].percentage =
+          pollTotalVotes > 0 ? Math.round((optionVotes[optionId].count / pollTotalVotes) * 100) : 0;
+      });
+
+      return {
+        ...poll,
+        totalVotes: pollTotalVotes,
+        optionVotes,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        totalLikes,
+        totalDislikes,
+        totalVotes,
+        likePercentage,
+        dislikePercentage,
+        likedBy,
+        dislikedBy,
+        polls: pollsWithVotes,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
 
 /**
  * @desc    Create new daily menu
@@ -743,6 +859,79 @@ export const publishMenu = async (req, res) => {
     res.status(500).json({
       success: false,
       message: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Get voting details for a menu (who voted for what)
+ * @route   GET /api/menu/:id/voting-details
+ * @access  Private
+ */
+export const getVotingDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { mealType } = req.query;
+
+    const menu = await Menu.findById(id);
+
+    if (!menu) {
+      return res.status(404).json({
+        success: false,
+        message: 'Menu not found',
+      });
+    }
+
+    const filter = {
+      menuId: id,
+      institutionId: req.user.institutionId,
+    };
+
+    if (mealType) {
+      filter.mealType = mealType;
+    }
+
+    const votes = await MenuVote.find(filter)
+      .populate('studentId', 'rollNo firstName lastName')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const grouped = {};
+    votes.forEach((vote) => {
+      if (!grouped[vote.mealType]) {
+        grouped[vote.mealType] = {
+          likers: [],
+          dislikers: [],
+          totalLikes: 0,
+          totalDislikes: 0,
+        };
+      }
+
+      const voter = {
+        studentName: `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim(),
+        rollNo: vote.studentId?.rollNo,
+        rating: vote.rating,
+        timestamp: vote.createdAt,
+      };
+
+      if (vote.voteType === 'like') {
+        grouped[vote.mealType].likers.push(voter);
+        grouped[vote.mealType].totalLikes += 1;
+      } else {
+        grouped[vote.mealType].dislikers.push(voter);
+        grouped[vote.mealType].totalDislikes += 1;
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: grouped,
+    });
+  } catch (error) {
+    console.error('Error getting voting details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch voting details',
     });
   }
 };
