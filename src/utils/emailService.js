@@ -2,6 +2,8 @@ import nodemailer from 'nodemailer';
 import { buildReceiptPdfBuffer } from './receiptPdf.js';
 // Note: dotenv is loaded in server.js, process.env is available globally
 
+let emailServiceEnabled = false;
+
 /**
  * Email validation helper
  * @param {string} email - Email to validate
@@ -13,30 +15,46 @@ const isValidEmail = (email) => {
 };
 
 /**
- * Create email transporter
+ * Create email transporter with DEBUG LOGGING
  * Returns null if email credentials are not configured
  */
 const createTransporter = () => {
   try {
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      console.log('📧 EMAIL_USER or EMAIL_PASS not configured');
       return null;
     }
 
-    // Use explicit host/port if provided, otherwise use Gmail service
-    const transporterConfig = process.env.EMAIL_HOST && process.env.EMAIL_PORT
+    console.log('📧 Creating email transporter...');
+    
+    // Determine email provider
+    const usingCustomHost = process.env.EMAIL_HOST && process.env.EMAIL_PORT;
+    const host = process.env.EMAIL_HOST || 'smtp.gmail.com';
+    const port = parseInt(process.env.EMAIL_PORT || 587, 10);
+    const secure = port === 465; // true for 465, false for 587 and others
+    
+    console.log(`   Host: ${host}`);
+    console.log(`   Port: ${port}`);
+    console.log(`   Secure (TLS): ${secure}`);
+    console.log(`   Auth User: ${process.env.EMAIL_USER ? '✓ configured' : '✗ missing'}`);
+
+    const transporterConfig = usingCustomHost
       ? {
-          host: process.env.EMAIL_HOST,
-          port: parseInt(process.env.EMAIL_PORT, 10),
-          secure: process.env.EMAIL_PORT === '465', // true for 465, false for other ports
+          host,
+          port,
+          secure,
           auth: {
             user: process.env.EMAIL_USER,
             pass: process.env.EMAIL_PASS,
           },
-          connectionTimeout: 20000,
-          greetingTimeout: 20000,
-          socketTimeout: 20000,
+          connectionTimeout: 25000,
+          greetingTimeout: 25000,
+          socketTimeout: 25000,
+          logger: process.env.NODE_ENV === 'development',
+          debug: process.env.NODE_ENV === 'development',
           tls: {
             rejectUnauthorized: false,
+            minVersion: 'TLSv1.2',
           },
         }
       : {
@@ -45,11 +63,14 @@ const createTransporter = () => {
             user: process.env.EMAIL_USER,
             pass: process.env.EMAIL_PASS,
           },
-          connectionTimeout: 20000,
-          greetingTimeout: 20000,
-          socketTimeout: 20000,
+          connectionTimeout: 25000,
+          greetingTimeout: 25000,
+          socketTimeout: 25000,
+          logger: process.env.NODE_ENV === 'development',
+          debug: process.env.NODE_ENV === 'development',
           tls: {
             rejectUnauthorized: false,
+            minVersion: 'TLSv1.2',
           },
         };
 
@@ -61,31 +82,82 @@ const createTransporter = () => {
 };
 
 /**
- * Verify email transporter connection
- * Called once at server startup
+ * Verify email transporter connection at server startup
+ * Non-blocking: server continues even if email verification fails
  */
 export const verifyEmailTransporter = async () => {
   try {
+    console.log('\n📧 Email Service Verification Starting...');
+    
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-      console.warn('⚠️ Email credentials not configured. Email sending will be skipped.');
+      console.warn('⚠️  Email credentials not configured in .env');
+      console.warn('    Email sending will be DISABLED');
+      console.warn('    Set EMAIL_USER and EMAIL_PASS to enable email service');
+      emailServiceEnabled = false;
       return false;
     }
 
     const transporter = createTransporter();
     if (!transporter) {
-      console.error('❌ Failed to create email transporter. Check your email configuration.');
+      console.error('❌ Failed to create email transporter instance');
+      emailServiceEnabled = false;
       return false;
     }
 
-    await transporter.verify();
+    console.log('📧 Attempting to verify transporter connection...');
+    
+    // Attempt verification with 15-second timeout
+    const verifyPromise = transporter.verify();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Verification timeout (15s)')), 15000)
+    );
+
+    await Promise.race([verifyPromise, timeoutPromise]);
+    
     console.log('✅ Email transporter verified successfully');
+    console.log('   Server is ready to send emails\n');
+    emailServiceEnabled = true;
     return true;
+    
   } catch (error) {
-    console.error('❌ Email transporter verification failed:', error.message);
-    console.error('   Check EMAIL_HOST, EMAIL_PORT, EMAIL_USER, and EMAIL_PASS in .env');
+    const errorMsg = error.message || error.toString();
+    console.error('\n❌ Email transporter verification FAILED');
+    console.error(`   Error: ${errorMsg}`);
+    console.error('\n   Possible causes:');
+    
+    if (errorMsg.includes('timeout') || errorMsg.includes('TIMEOUT')) {
+      console.error('   → Render may block outbound SMTP connections');
+      console.error('   → Network firewall blocking port 587 or 465');
+      console.error('   → SMTP server not responding');
+    }
+    if (errorMsg.includes('ENOTFOUND') || errorMsg.includes('getaddrinfo')) {
+      console.error('   → EMAIL_HOST value is incorrect or unreachable');
+      console.error('   → Current host: ' + process.env.EMAIL_HOST);
+    }
+    if (errorMsg.includes('Invalid login') || errorMsg.includes('authentication')) {
+      console.error('   → EMAIL_USER or EMAIL_PASS is incorrect');
+      console.error('   → Gmail requires App Passwords, not account password');
+    }
+    if (errorMsg.includes('STARTTLS')) {
+      console.error('   → TLS/SSL configuration mismatch with port');
+    }
+    
+    console.error('\n   Recommendations:');
+    console.error('   1. For Gmail: Use App Passwords (not regular password)');
+    console.error('   2. For Render: Switch to Brevo or SendGrid (more reliable)');
+    console.error('   3. Check .env EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS');
+    console.error('   4. Verify Google Account 2FA is enabled for Gmail App Passwords');
+    console.error('\n');
+    
+    emailServiceEnabled = false;
     return false;
   }
 };
+
+/**
+ * Check if email service is enabled
+ */
+export const isEmailServiceEnabled = () => emailServiceEnabled;
 
 /**
  * Send temporary password email to student
@@ -102,6 +174,13 @@ export const sendTempPasswordEmail = async (email, name, tempPassword) => {
       return { success: false, message: 'Invalid email address' };
     }
 
+    // Check if email service is enabled
+    if (!emailServiceEnabled) {
+      console.warn('⚠️ Email service is disabled. Skipping email send.');
+      console.log(`📝 Temporary password for ${name} (${email}): ${tempPassword}`);
+      return { success: false, message: 'Email service disabled' };
+    }
+
     // Check if email credentials are configured
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       console.warn('⚠️ Email credentials not configured. Skipping email send.');
@@ -109,7 +188,7 @@ export const sendTempPasswordEmail = async (email, name, tempPassword) => {
       return { success: false, message: 'Email service not configured' };
     }
 
-    // Create transporter (returns null if credentials invalid)
+    // Create transporter
     const transporter = createTransporter();
     if (!transporter) {
       console.warn('⚠️ Could not create email transporter. Skipping email send.');
@@ -210,7 +289,7 @@ This is an automated message from HostelEase Management System.
     await Promise.race([
       transporter.sendMail(mailOptions),
       new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)
+        setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)
       )
     ]);
     
@@ -237,6 +316,13 @@ export const sendParentTempPasswordEmail = async (email, name, tempPassword, stu
     if (!isValidEmail(email)) {
       console.error('❌ Invalid email format:', email);
       return { success: false, message: 'Invalid email address' };
+    }
+
+    // Check if email service is enabled
+    if (!emailServiceEnabled) {
+      console.warn('⚠️ Email service is disabled. Skipping email send.');
+      console.log(`📝 Parent temp password for ${name} (${email}): ${tempPassword}`);
+      return { success: false, message: 'Email service disabled' };
     }
 
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
@@ -328,7 +414,7 @@ HostelEase Management System.
 
     await Promise.race([
       transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)),
     ]);
     console.log(`✅ Parent temporary password email sent successfully to ${email}`);
     return { success: true, message: 'Email sent to parent' };
@@ -360,6 +446,12 @@ export const sendPaymentReceiptEmail = async ({
     if (!isValidEmail(to)) {
       console.error('❌ Invalid email format for receipt:', to);
       return { success: false, message: 'Invalid email address' };
+    }
+
+    // Check if email service is enabled
+    if (!emailServiceEnabled) {
+      console.warn('⚠️ Email service is disabled. Skipping receipt email.');
+      return { success: false, message: 'Email service disabled' };
     }
 
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
@@ -409,7 +501,7 @@ export const sendPaymentReceiptEmail = async ({
 
     await Promise.race([
       transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)),
     ]);
 
     console.log(`✅ Payment receipt email sent successfully to ${to}`);
@@ -437,6 +529,12 @@ export const sendPaymentReminderEmail = async ({
     if (!isValidEmail(to)) {
       console.error('❌ Invalid email format for reminder:', to);
       return { success: false, message: 'Invalid email address' };
+    }
+
+    // Check if email service is enabled
+    if (!emailServiceEnabled) {
+      console.warn('⚠️ Email service is disabled. Skipping reminder email.');
+      return { success: false, message: 'Email service disabled' };
     }
 
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
@@ -468,7 +566,7 @@ export const sendPaymentReminderEmail = async ({
 
     await Promise.race([
       transporter.sendMail(mailOptions),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 20 seconds')), 20000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout after 25 seconds')), 25000)),
     ]);
 
     console.log(`✅ Payment reminder email sent successfully to ${to}`);

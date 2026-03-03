@@ -34,8 +34,10 @@ connectDB().then(async () => {
     console.log(`✅ Listening on http://localhost:${PORT}`);
   });
 
-  // Verify email transporter connection at startup
-  await verifyEmailTransporter();
+  // Verify email transporter at startup (non-blocking - doesn't prevent server from starting)
+  verifyEmailTransporter().catch((err) => {
+    console.error('⚠️ Email verification error (server will continue):', err.message || err);
+  });
 
   schedulePaymentReminders();
 
