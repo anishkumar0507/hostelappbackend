@@ -17,6 +17,10 @@ const pollVoteSchema = new mongoose.Schema(
       ref: 'Student',
       required: true,
     },
+    studentName: {
+      type: String,
+      required: true,
+    },
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

@@ -6,67 +6,13 @@ import Poll from '../models/Poll.model.js';
 import PollVote from '../models/PollVote.model.js';
 
 /**
- * @desc    Get poll summary and poll list under menu namespace
+ * @desc    Get all polls with voter details per option
  * @route   GET /api/menu/poll?status=
  * @access  Private
  */
 export const getPolls = async (req, res) => {
   try {
     const { status } = req.query;
-
-    const menuFilter = {
-      institutionId: req.user.institutionId,
-    };
-
-    if (status) {
-      menuFilter.status = status === 'active' ? 'published' : status;
-    }
-
-    const menus = await Menu.find(menuFilter).select('_id').lean();
-    const menuIds = menus.map((menu) => menu._id);
-
-    const voteFilter = {
-      institutionId: req.user.institutionId,
-    };
-
-    if (menuIds.length > 0) {
-      voteFilter.menuId = { $in: menuIds };
-    }
-
-    const votes = await MenuVote.find(voteFilter)
-      .populate('studentId', 'firstName lastName rollNo')
-      .lean();
-
-    const likedVotes = votes.filter((vote) => vote.voteType === 'like');
-    const dislikedVotes = votes.filter((vote) => vote.voteType === 'dislike');
-
-    const toStudentSummary = (vote) => ({
-      studentId: vote.studentId?._id || vote.studentId || null,
-      studentName:
-        `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
-        vote.studentId?.rollNo ||
-        'Unknown Student',
-    });
-
-    const likedBy = likedVotes.map(toStudentSummary);
-    const dislikedBy = dislikedVotes.map(toStudentSummary);
-    const voters = votes.map((vote) => ({
-      studentId: vote.studentId?._id || vote.studentId || null,
-      studentName:
-        `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
-        vote.studentName ||
-        vote.studentId?.rollNo ||
-        'Unknown Student',
-      voteType: vote.voteType,
-      mealType: vote.mealType,
-      createdAt: vote.createdAt,
-    }));
-
-    const totalLikes = likedBy.length;
-    const totalDislikes = dislikedBy.length;
-    const totalVotes = totalLikes + totalDislikes;
-    const likePercentage = totalVotes > 0 ? Math.round((totalLikes / totalVotes) * 100) : 0;
-    const dislikePercentage = totalVotes > 0 ? Math.round((totalDislikes / totalVotes) * 100) : 0;
 
     const pollFilter = {
       institutionId: req.user.institutionId,
@@ -83,51 +29,114 @@ export const getPolls = async (req, res) => {
     const pollIds = polls.map((poll) => poll._id);
     const pollVotes = pollIds.length
       ? await PollVote.find({ pollId: { $in: pollIds } })
-          .populate('studentId', 'rollNo firstName lastName')
           .lean()
       : [];
 
-    const pollsWithVotes = polls.map((poll) => {
+    const pollsWithDetails = polls.map((poll) => {
       const votesForPoll = pollVotes.filter((vote) => String(vote.pollId) === String(poll._id));
 
-      const optionVotes = {};
-      (poll.options || []).forEach((option) => {
-        optionVotes[option.id] = {
-          count: votesForPoll.filter((vote) => vote.optionId === option.id).length,
-          percentage: 0,
+      // Build options with voter details
+      const options = (poll.options || []).map((option) => {
+        const optionVotes = votesForPoll.filter((vote) => vote.optionId === option.id);
+        const totalVotes = optionVotes.length;
+
+        return {
+          optionId: option.id,
+          optionName: option.text,
+          totalVotes,
+          percentage: pollVotes.length > 0 ? Math.round((totalVotes / votesForPoll.length) * 100) : 0,
+          voters: optionVotes.map((vote) => ({
+            studentId: vote.studentId,
+            studentName: vote.studentName,
+            createdAt: vote.createdAt,
+          })),
         };
       });
 
-      const pollTotalVotes = votesForPoll.length;
-      Object.keys(optionVotes).forEach((optionId) => {
-        optionVotes[optionId].percentage =
-          pollTotalVotes > 0 ? Math.round((optionVotes[optionId].count / pollTotalVotes) * 100) : 0;
-      });
-
       return {
-        ...poll,
-        totalVotes: pollTotalVotes,
-        optionVotes,
-        votersByOption: (poll.options || []).reduce((accumulator, option) => {
-          accumulator[option.id] = votesForPoll
-            .filter((vote) => vote.optionId === option.id)
-            .map((vote) => ({
-              studentId: vote.studentId?._id || vote.studentId || null,
-              studentName:
-                `${vote.studentId?.firstName || ''} ${vote.studentId?.lastName || ''}`.trim() ||
-                vote.studentId?.rollNo ||
-                'Unknown Student',
-              selectedOption: option.text,
-              createdAt: vote.createdAt,
-            }));
-          return accumulator;
-        }, {}),
+        pollId: poll._id,
+        title: poll.title,
+        description: poll.description,
+        status: poll.status,
+        createdAt: poll.createdAt,
+        options,
       };
     });
 
     return res.status(200).json({
       success: true,
+      data: pollsWithDetails,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Get menu feedback (likes/dislikes for specific menu and meal type)
+ * @route   GET /api/menu/:id/feedback?mealType=
+ * @access  Private
+ */
+export const getMenuFeedback = async (req, res) => {
+  try {
+    const { id: menuId } = req.params;
+    const { mealType } = req.query;
+
+    if (!mealType || !['Breakfast', 'Lunch', 'Snacks', 'Dinner'].includes(mealType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid mealType is required: Breakfast, Lunch, Snacks, or Dinner',
+      });
+    }
+
+    // Check if menu exists
+    const menu = await Menu.findById(menuId);
+    if (!menu) {
+      return res.status(404).json({
+        success: false,
+        message: 'Menu not found',
+      });
+    }
+
+    // Get votes for this menu and meal type
+    const votes = await MenuVote.find({
+      menuId,
+      mealType,
+      institutionId: req.user.institutionId,
+    }).lean();
+
+    // Separate likes and dislikes
+    const likedVotes = votes.filter((vote) => vote.voteType === 'like');
+    const dislikedVotes = votes.filter((vote) => vote.voteType === 'dislike');
+
+    const totalLikes = likedVotes.length;
+    const totalDislikes = dislikedVotes.length;
+    const totalVotes = totalLikes + totalDislikes;
+
+    const likePercentage = totalVotes > 0 ? Math.round((totalLikes / totalVotes) * 100) : 0;
+    const dislikePercentage = totalVotes > 0 ? Math.round((totalDislikes / totalVotes) * 100) : 0;
+
+    // Build student lists
+    const likedBy = likedVotes.map((vote) => ({
+      studentId: vote.studentId,
+      studentName: vote.studentName,
+      createdAt: vote.createdAt,
+    }));
+
+    const dislikedBy = dislikedVotes.map((vote) => ({
+      studentId: vote.studentId,
+      studentName: vote.studentName,
+      createdAt: vote.createdAt,
+    }));
+
+    return res.status(200).json({
+      success: true,
       data: {
+        menuId,
+        mealType,
         totalLikes,
         totalDislikes,
         totalVotes,
@@ -135,8 +144,6 @@ export const getPolls = async (req, res) => {
         dislikePercentage,
         likedBy,
         dislikedBy,
-        voters,
-        polls: pollsWithVotes,
       },
     });
   } catch (error) {
@@ -487,9 +494,16 @@ export const voteOnMenu = async (req, res) => {
     normalizedVoteDate.setHours(0, 0, 0, 0);
     const studentName =
       `${student.firstName || ''} ${student.lastName || ''}`.trim() ||
-      student.rollNo ||
-      req.user.name ||
-      'Unknown Student';
+      student.rollNumber ||
+      req.user.name;
+
+    // Validate studentName is not empty
+    if (!studentName || studentName.trim() === '') {
+      return res.status(500).json({
+        success: false,
+        message: 'Cannot determine student name from database',
+      });
+    }
 
     // Check if student already voted for this meal on this day
     let existingVote = await MenuVote.findOne({
@@ -504,7 +518,7 @@ export const voteOnMenu = async (req, res) => {
       existingVote.menuId = menuId;
       existingVote.voteType = voteType;
       existingVote.rating = rating;
-      existingVote.studentName = studentName;
+      existingVote.studentName = studentName.trim();
       existingVote.date = normalizedVoteDate;
       await existingVote.save();
 
@@ -520,7 +534,7 @@ export const voteOnMenu = async (req, res) => {
       institutionId: req.user.institutionId,
       menuId,
       studentId: student._id,
-      studentName,
+      studentName: studentName.trim(),
       userId: req.user._id,
       mealType,
       voteType,

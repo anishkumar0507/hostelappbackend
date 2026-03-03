@@ -213,6 +213,20 @@ export const votePoll = async (req, res) => {
       });
     }
 
+    // Build student name from student document
+    const studentName =
+      `${student.firstName || ''} ${student.lastName || ''}`.trim() ||
+      student.rollNumber ||
+      req.user.name;
+
+    // Validate studentName is not empty
+    if (!studentName || studentName.trim() === '') {
+      return res.status(500).json({
+        success: false,
+        message: 'Cannot determine student name from database',
+      });
+    }
+
     // Remove existing vote if updating
     await PollVote.deleteOne({
       pollId: id,
@@ -224,6 +238,7 @@ export const votePoll = async (req, res) => {
       institutionId: req.user.institutionId,
       pollId: id,
       studentId: student._id,
+      studentName: studentName.trim(),
       userId: req.user._id,
       optionId,
       optionText: option.text,

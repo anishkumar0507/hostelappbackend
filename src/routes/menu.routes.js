@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   getPolls,
+  getMenuFeedback,
   createMenu,
   getMenus,
   getMenuById,
@@ -46,6 +47,9 @@ router.get('/poll/:id/details', getPollDetails);
 router.post('/poll/:id/vote', votePoll);
 router.put('/poll/:id/close', authorize('warden'), closePoll);
 router.delete('/poll/:id', authorize('warden'), deletePoll);
+
+// Get menu feedback (likes/dislikes) - must be above '/:id'
+router.get('/feedback/:id', getMenuFeedback);
 
 // Get single menu with stats
 router.get('/:id', getMenuById);
