@@ -1,5 +1,8 @@
 import Complaint from '../models/Complaint.model.js';
 import Student from '../models/Student.model.js';
+import User from '../models/User.model.js';
+import Notification from '../models/Notification.model.js';
+import { getIO } from '../utils/socket.js';
 
 /**
  * @desc    Create a new complaint
@@ -39,8 +42,52 @@ export const createComplaint = async (req, res) => {
     });
 
     // Populate student details
-    await complaint.populate('studentId', 'userId room');
-    await complaint.populate('studentId.userId', 'name');
+    await complaint.populate({
+      path: 'studentId',
+      select: 'userId room',
+      populate: {
+        path: 'userId',
+        select: 'name',
+      },
+    });
+
+    // NOTIFICATION: Notify all wardens about new complaint
+    try {
+      const wardens = await User.find({ role: 'warden', institutionId: req.user.institutionId });
+      
+      // Create notifications for all wardens
+      const notifications = wardens.map(warden => ({
+        institutionId: req.user.institutionId,
+        userId: warden._id,
+        type: 'complaint',
+        title: 'New Complaint Received',
+        message: `${complaint.studentId.userId.name} raised a complaint: "${title.trim()}"`,
+        relatedId: complaint._id,
+        isRead: false,
+      }));
+
+      if (notifications.length > 0) {
+        await Notification.insertMany(notifications);
+      }
+
+      // Emit real-time socket notification to wardens
+      const io = getIO();
+      if (io) {
+        wardens.forEach(warden => {
+          io.to(`warden_${warden._id}`).emit('newComplaint', {
+            id: complaint._id,
+            title: complaint.title,
+            studentName: complaint.studentId.userId.name,
+            category: complaint.category,
+            priority: complaint.priority,
+            createdAt: complaint.createdAt,
+          });
+        });
+      }
+    } catch (notifError) {
+      console.error('Notification error:', notifError);
+      // Don't fail the request if notification fails
+    }
 
     res.status(201).json({
       success: true,
@@ -76,8 +123,14 @@ export const createComplaint = async (req, res) => {
 export const getAllComplaints = async (req, res) => {
   try {
     const complaints = await Complaint.find({ institutionId: req.user.institutionId })
-      .populate('studentId', 'userId room')
-      .populate('studentId.userId', 'name')
+      .populate({
+        path: 'studentId',
+        select: 'userId room',
+        populate: {
+          path: 'userId',
+          select: 'name',
+        },
+      })
       .populate('assignedTo', 'name')
       .sort({ createdAt: -1 });
 
@@ -92,8 +145,8 @@ export const getAllComplaints = async (req, res) => {
       resolvedAt: complaint.resolvedAt,
       resolution: complaint.resolution,
       student: {
-        name: complaint.studentId.userId.name,
-        room: complaint.studentId.room,
+        name: complaint.studentId?.userId?.name || 'Unknown',
+        room: complaint.studentId?.room || 'N/A',
       },
       assignedTo: complaint.assignedTo ? complaint.assignedTo.name : null,
     }));
@@ -188,9 +241,16 @@ export const updateComplaintStatus = async (req, res) => {
       { _id: id, institutionId: req.user.institutionId },
       updateData,
       { new: true }
-    ).populate('studentId', 'userId room')
-     .populate('studentId.userId', 'name')
-     .populate('assignedTo', 'name');
+    )
+      .populate({
+        path: 'studentId',
+        select: 'userId room',
+        populate: {
+          path: 'userId',
+          select: 'name',
+        },
+      })
+      .populate('assignedTo', 'name');
 
     if (!complaint) {
       return res.status(404).json({
@@ -213,10 +273,10 @@ export const updateComplaintStatus = async (req, res) => {
         resolvedAt: complaint.resolvedAt,
         resolution: complaint.resolution,
         student: {
-          name: complaint.studentId.userId.name,
-          room: complaint.studentId.room,
+          name: complaint.studentId?.userId?.name || 'Unknown',
+          room: complaint.studentId?.room || 'N/A',
         },
-        assignedTo: complaint.assignedTo.name,
+        assignedTo: complaint.assignedTo?.name || null,
       },
     });
   } catch (error) {

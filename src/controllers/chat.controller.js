@@ -2,6 +2,7 @@ import Chat from '../models/Chat.model.js';
 import Parent from '../models/Parent.model.js';
 import Student from '../models/Student.model.js';
 import User from '../models/User.model.js';
+import { getIO } from '../utils/socket.js';
 
 /**
  * Get or create chat between parent and warden for a student
@@ -130,16 +131,29 @@ export const sendMessage = async (req, res) => {
     await chat.populate('messages.senderId', 'name role');
     const lastMsg = chat.messages[chat.messages.length - 1];
 
+    const messageData = {
+      id: lastMsg._id,
+      senderId: lastMsg.senderId._id,
+      senderName: lastMsg.senderId.name,
+      senderRole: lastMsg.senderId.role,
+      text: lastMsg.text,
+      createdAt: lastMsg.createdAt,
+      chatId: chat._id,
+    };
+
+    // Emit socket event to warden for real-time update
+    try {
+      const io = getIO();
+      if (io) {
+        io.to(`warden_${warden._id}`).emit('newChatMessage', messageData);
+      }
+    } catch (socketError) {
+      console.error('Socket emit error:', socketError);
+    }
+
     res.status(201).json({
       success: true,
-      data: {
-        id: lastMsg._id,
-        senderId: lastMsg.senderId._id,
-        senderName: lastMsg.senderId.name,
-        senderRole: lastMsg.senderId.role,
-        text: lastMsg.text,
-        createdAt: lastMsg.createdAt,
-      },
+      data: messageData,
     });
   } catch (error) {
     console.error('sendMessage error:', error);
@@ -287,16 +301,29 @@ export const wardenSendMessage = async (req, res) => {
     await chat.populate('messages.senderId', 'name role');
     const lastMsg = chat.messages[chat.messages.length - 1];
 
+    const messageData = {
+      id: lastMsg._id,
+      senderId: lastMsg.senderId._id,
+      senderName: lastMsg.senderId.name,
+      senderRole: lastMsg.senderId.role,
+      text: lastMsg.text,
+      createdAt: lastMsg.createdAt,
+      chatId: chat._id,
+    };
+
+    // Emit socket event to parent for real-time update
+    try {
+      const io = getIO();
+      if (io) {
+        io.to(`parent_${chat.parentId}`).emit('newChatMessage', messageData);
+      }
+    } catch (socketError) {
+      console.error('Socket emit error:', socketError);
+    }
+
     res.status(201).json({
       success: true,
-      data: {
-        id: lastMsg._id,
-        senderId: lastMsg.senderId._id,
-        senderName: lastMsg.senderId.name,
-        senderRole: lastMsg.senderId.role,
-        text: lastMsg.text,
-        createdAt: lastMsg.createdAt,
-      },
+      data: messageData,
     });
   } catch (error) {
     console.error('wardenSendMessage error:', error);

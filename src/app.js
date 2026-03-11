@@ -15,6 +15,7 @@ import locationRoutes from './routes/location.routes.js';
 import chatRoutes from './routes/chat.routes.js';
 import menuRoutes from './routes/menu.routes.js';
 import pollRoutes from './routes/poll.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
 
 // Import error middleware
 import { errorHandler, notFound } from './middleware/error.middleware.js';
@@ -91,6 +92,7 @@ app.use('/api/location', locationRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/poll', pollRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Error handling middleware (must be last)
 app.use(notFound);
