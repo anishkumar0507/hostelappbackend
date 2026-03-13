@@ -280,7 +280,16 @@ export const savePushToken = async (req, res) => {
       });
     }
 
+    // Evict this token from any OTHER user who already has it.
+    // This prevents a shared-device scenario where two users hold the same
+    // Expo push token, causing cross-user notification delivery.
+    await User.updateMany(
+      { expoPushToken, _id: { $ne: req.user._id } },
+      { $unset: { expoPushToken: '' } }
+    );
+
     await User.findByIdAndUpdate(req.user._id, { expoPushToken });
+    console.log('[push] Token saved for user:', req.user._id);
 
     res.status(200).json({
       success: true,
@@ -292,6 +301,22 @@ export const savePushToken = async (req, res) => {
       success: false,
       message: 'Server error while saving push token',
     });
+  }
+};
+
+/**
+ * @desc    Clear Expo push token on logout
+ * @route   POST /api/users/clear-push-token
+ * @access  Private
+ */
+export const clearPushToken = async (req, res) => {
+  try {
+    await User.findByIdAndUpdate(req.user._id, { $unset: { expoPushToken: '' } });
+    console.log('[push] Token cleared for user:', req.user._id);
+    res.status(200).json({ success: true, message: 'Push token cleared' });
+  } catch (error) {
+    console.error('clearPushToken error:', error);
+    res.status(500).json({ success: false, message: 'Server error while clearing push token' });
   }
 };
 

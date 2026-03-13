@@ -3,14 +3,13 @@ import User from '../models/User.model.js';
 import { getIO } from '../utils/socket.js';
 import { sendPushNotification } from './pushNotification.service.js';
 
+// Emit only to the user-specific room to avoid duplicate events.
+// Role-specific room events (newComplaint, leaveStatusUpdated, etc.) are
+// dispatched directly by the controllers where more context is available.
 const emitNotification = (io, user, eventName, payload) => {
   if (!io || !user?._id) return;
-
   const userId = String(user._id);
   io.to(`user_${userId}`).emit(eventName, payload);
-  if (user.role) {
-    io.to(`${user.role}_${userId}`).emit(eventName, payload);
-  }
 };
 
 export const notifyUser = async ({
@@ -26,6 +25,8 @@ export const notifyUser = async ({
 }) => {
   const user = await User.findById(userId).select('role expoPushToken');
   if (!user) return null;
+
+  console.log('[notification] Sending notification to user:', user._id, '| role:', user.role, '| title:', title);
 
   const notification = await Notification.create({
     institutionId,
