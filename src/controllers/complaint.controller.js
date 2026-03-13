@@ -134,22 +134,30 @@ export const getAllComplaints = async (req, res) => {
       .populate('assignedTo', 'name')
       .sort({ createdAt: -1 });
 
-    const formattedComplaints = complaints.map(complaint => ({
-      id: complaint._id,
-      title: complaint.title,
-      description: complaint.description,
-      category: complaint.category,
-      status: complaint.status,
-      priority: complaint.priority,
-      createdAt: complaint.createdAt,
-      resolvedAt: complaint.resolvedAt,
-      resolution: complaint.resolution,
-      student: {
-        name: complaint.studentId?.userId?.name || 'Unknown',
-        room: complaint.studentId?.room || 'N/A',
-      },
-      assignedTo: complaint.assignedTo ? complaint.assignedTo.name : null,
-    }));
+    const formattedComplaints = complaints.map(complaint => {
+      const studentName = complaint.studentId?.userId?.name || 'Unknown';
+      const studentRoom = complaint.studentId?.room || 'N/A';
+      return {
+        id: complaint._id,
+        title: complaint.title,
+        description: complaint.description,
+        category: complaint.category,
+        status: complaint.status,
+        priority: complaint.priority,
+        createdAt: complaint.createdAt,
+        resolvedAt: complaint.resolvedAt,
+        resolution: complaint.resolution,
+        // Top-level fields for easy frontend access
+        studentName,
+        studentRoom,
+        // Nested object kept for backward compatibility
+        student: {
+          name: studentName,
+          room: studentRoom,
+        },
+        assignedTo: complaint.assignedTo ? complaint.assignedTo.name : null,
+      };
+    });
 
     res.status(200).json({
       success: true,
@@ -257,6 +265,20 @@ export const updateComplaintStatus = async (req, res) => {
         success: false,
         message: 'Complaint not found',
       });
+    }
+
+    // Notify the student via socket that their complaint status changed
+    try {
+      const io = getIO();
+      if (io && complaint.studentId?.userId?._id) {
+        io.to(`student_${complaint.studentId.userId._id}`).emit('complaintStatusUpdated', {
+          id: complaint._id,
+          title: complaint.title,
+          status: complaint.status,
+        });
+      }
+    } catch (socketError) {
+      console.error('Socket emit error (complaint update):', socketError);
     }
 
     res.status(200).json({

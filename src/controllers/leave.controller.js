@@ -1,6 +1,8 @@
 import Leave from '../models/Leave.model.js';
 import Student from '../models/Student.model.js';
 import Parent from '../models/Parent.model.js';
+import User from '../models/User.model.js';
+import { getIO } from '../utils/socket.js';
 
 /**
  * @desc    Create a new leave request
@@ -23,10 +25,11 @@ export const createLeaveRequest = async (req, res) => {
     const outDateObj = new Date(outDate);
     const inDateObj = new Date(inDate);
 
-    if (outDateObj >= inDateObj) {
+    // Validate dates: inDate must be on or after outDate (same day allowed for short outings)
+    if (inDateObj < outDateObj) {
       return res.status(400).json({
         success: false,
-        message: 'Out date must be before in date',
+        message: 'Return date must be on or after the out date',
       });
     }
 
@@ -67,6 +70,26 @@ export const createLeaveRequest = async (req, res) => {
         select: 'name'
       }
     });
+
+    // Notify wardens via socket about new leave request
+    try {
+      const io = getIO();
+      if (io) {
+        const wardens = await User.find({ role: 'warden', institutionId: req.user.institutionId });
+        wardens.forEach(warden => {
+          io.to(`warden_${warden._id}`).emit('newLeaveRequest', {
+            id: leave._id,
+            studentName: leave.studentId?.userId?.name || 'Unknown',
+            type: leave.type,
+            outDate: leave.outDate,
+            inDate: leave.inDate,
+            status: leave.status,
+          });
+        });
+      }
+    } catch (socketError) {
+      console.error('Socket emit error (leave):', socketError);
+    }
 
     res.status(201).json({
       success: true,
@@ -286,6 +309,26 @@ export const parentApproveOrReject = async (req, res) => {
         }
       })
       .populate('parentApprovedBy', 'name');
+
+    // Notify wardens via socket when parent approves (leave is now ready for warden action)
+    if (status === 'Approved') {
+      try {
+        const io = getIO();
+        if (io) {
+          const wardens = await User.find({ role: 'warden', institutionId: req.user.institutionId });
+          wardens.forEach(warden => {
+            io.to(`warden_${warden._id}`).emit('leaveReadyForApproval', {
+              id: leave._id,
+              studentName: populated.studentId?.userId?.name || 'Unknown',
+              type: populated.type,
+              status: populated.status,
+            });
+          });
+        }
+      } catch (socketError) {
+        console.error('Socket emit error (parent approval):', socketError);
+      }
+    }
 
     return res.status(200).json({
       success: true,
