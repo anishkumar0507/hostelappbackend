@@ -36,6 +36,10 @@ const userSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    expoPushToken: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,

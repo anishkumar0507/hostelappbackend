@@ -1,5 +1,5 @@
 import express from 'express';
-import { login, wardenSignup, changePassword } from '../controllers/auth.controller.js';
+import { login, wardenSignup, changePassword, savePushToken } from '../controllers/auth.controller.js';
 import { protect } from '../middleware/auth.middleware.js';
 
 const router = express.Router();
@@ -24,5 +24,12 @@ router.post('/login', login);
  * @access  Private
  */
 router.put('/change-password', protect, changePassword);
+
+/**
+ * @route   PUT /api/auth/push-token
+ * @desc    Save Expo push notification token
+ * @access  Private
+ */
+router.put('/push-token', protect, savePushToken);
 
 export default router;

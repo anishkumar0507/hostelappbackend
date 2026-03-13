@@ -265,6 +265,37 @@ export const login = async (req, res) => {
 };
 
 /**
+ * @desc    Save Expo push token for the logged-in user
+ * @route   PUT /api/auth/push-token
+ * @access  Private
+ */
+export const savePushToken = async (req, res) => {
+  try {
+    const { expoPushToken } = req.body;
+
+    if (!expoPushToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'expoPushToken is required',
+      });
+    }
+
+    await User.findByIdAndUpdate(req.user._id, { expoPushToken });
+
+    res.status(200).json({
+      success: true,
+      message: 'Push token saved successfully',
+    });
+  } catch (error) {
+    console.error('savePushToken error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while saving push token',
+    });
+  }
+};
+
+/**
  * @desc    Change password (for users with temporary password)
  * @route   PUT /api/auth/change-password
  * @access  Private

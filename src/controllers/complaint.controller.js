@@ -3,6 +3,7 @@ import Student from '../models/Student.model.js';
 import User from '../models/User.model.js';
 import Notification from '../models/Notification.model.js';
 import { getIO } from '../utils/socket.js';
+import { sendPushNotification, sendPushNotifications } from '../services/pushNotification.service.js';
 
 /**
  * @desc    Create a new complaint
@@ -84,6 +85,17 @@ export const createComplaint = async (req, res) => {
           });
         });
       }
+
+      // Push notifications to all wardens
+      const wardenTokens = wardens.map(w => w.expoPushToken).filter(Boolean);
+      const studentName = complaint.studentId.userId.name;
+      const room = complaint.studentId.room || '';
+      await sendPushNotifications(
+        wardenTokens,
+        'New Complaint Received',
+        `${studentName}${room ? ` (Room ${room})` : ''}: ${title.trim()}`,
+        { type: 'complaint', complaintId: String(complaint._id) }
+      );
     } catch (notifError) {
       console.error('Notification error:', notifError);
       // Don't fail the request if notification fails
@@ -276,6 +288,22 @@ export const updateComplaintStatus = async (req, res) => {
           title: complaint.title,
           status: complaint.status,
         });
+      }
+
+      // Push notification to the student
+      const studentUser = await User.findById(complaint.studentId?.userId?._id);
+      if (studentUser?.expoPushToken) {
+        const statusMsg = status === 'Resolved'
+          ? `Your complaint "${complaint.title}" has been resolved.`
+          : status === 'Rejected'
+            ? `Your complaint "${complaint.title}" was rejected.`
+            : `Your complaint "${complaint.title}" is now In Progress.`;
+        await sendPushNotification(
+          studentUser.expoPushToken,
+          'Complaint Status Updated',
+          statusMsg,
+          { type: 'complaint', complaintId: String(complaint._id), status }
+        );
       }
     } catch (socketError) {
       console.error('Socket emit error (complaint update):', socketError);
