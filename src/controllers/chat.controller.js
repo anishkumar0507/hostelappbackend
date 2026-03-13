@@ -3,7 +3,7 @@ import Parent from '../models/Parent.model.js';
 import Student from '../models/Student.model.js';
 import User from '../models/User.model.js';
 import { getIO } from '../utils/socket.js';
-import { sendPushNotification } from '../services/pushNotification.service.js';
+import { notifyUser } from '../services/notification.service.js';
 
 /**
  * Get or create chat between parent and warden for a student
@@ -142,20 +142,23 @@ export const sendMessage = async (req, res) => {
       chatId: chat._id,
     };
 
-    // Emit socket event to warden for real-time update; also push
+    // Emit socket event to warden for real-time update.
     try {
       const io = getIO();
       if (io) {
         io.to(`warden_${warden._id}`).emit('newChatMessage', messageData);
       }
-      if (warden?.expoPushToken) {
-        await sendPushNotification(
-          warden.expoPushToken,
-          'New Message from Parent',
-          `${messageData.senderName}: ${lastMsg.text}`,
-          { type: 'chat', chatId: String(chat._id) }
-        );
-      }
+
+      await notifyUser({
+        institutionId: req.user.institutionId,
+        userId: warden._id,
+        type: 'chat',
+        title: 'New Message from Parent',
+        message: `${messageData.senderName}: ${lastMsg.text}`,
+        referenceId: chat._id,
+        socketEvent: 'notification:new',
+        pushData: { type: 'chat', chatId: String(chat._id) },
+      });
     } catch (socketError) {
       console.error('Socket emit error:', socketError);
     }
@@ -320,21 +323,23 @@ export const wardenSendMessage = async (req, res) => {
       chatId: chat._id,
     };
 
-    // Emit socket event to parent for real-time update; also push
+    // Emit socket event to parent for real-time update.
     try {
       const io = getIO();
       if (io) {
         io.to(`parent_${chat.parentId}`).emit('newChatMessage', messageData);
       }
-      const parentUser = await User.findById(chat.parentId);
-      if (parentUser?.expoPushToken) {
-        await sendPushNotification(
-          parentUser.expoPushToken,
-          'New Message from Warden',
-          `${messageData.senderName}: ${lastMsg.text}`,
-          { type: 'chat', chatId: String(chat._id) }
-        );
-      }
+
+      await notifyUser({
+        institutionId: req.user.institutionId,
+        userId: chat.parentId,
+        type: 'chat',
+        title: 'New Message from Warden',
+        message: `${messageData.senderName}: ${lastMsg.text}`,
+        referenceId: chat._id,
+        socketEvent: 'notification:new',
+        pushData: { type: 'chat', chatId: String(chat._id) },
+      });
     } catch (socketError) {
       console.error('Socket emit error:', socketError);
     }

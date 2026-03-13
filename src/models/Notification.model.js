@@ -29,9 +29,13 @@ const notificationSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    relatedId: {
+    referenceId: {
       type: mongoose.Schema.Types.ObjectId,
       // Reference to the related document (complaint, leave, etc.)
+    },
+    relatedId: {
+      type: mongoose.Schema.Types.ObjectId,
+      // Backward compatible alias for older code paths.
     },
     isRead: {
       type: Boolean,
@@ -49,6 +53,16 @@ const notificationSchema = new mongoose.Schema(
 // Index for efficient queries
 notificationSchema.index({ userId: 1, isRead: 1, createdAt: -1 });
 notificationSchema.index({ institutionId: 1, userId: 1 });
+
+notificationSchema.pre('validate', function syncReferenceIds(next) {
+  if (!this.referenceId && this.relatedId) {
+    this.referenceId = this.relatedId;
+  }
+  if (!this.relatedId && this.referenceId) {
+    this.relatedId = this.referenceId;
+  }
+  next();
+});
 
 const Notification = mongoose.model('Notification', notificationSchema);
 

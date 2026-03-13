@@ -31,5 +31,6 @@ router.put('/change-password', protect, changePassword);
  * @access  Private
  */
 router.put('/push-token', protect, savePushToken);
+router.post('/push-token', protect, savePushToken);
 
 export default router;

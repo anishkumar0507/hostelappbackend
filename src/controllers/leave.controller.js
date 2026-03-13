@@ -3,7 +3,7 @@ import Student from '../models/Student.model.js';
 import Parent from '../models/Parent.model.js';
 import User from '../models/User.model.js';
 import { getIO } from '../utils/socket.js';
-import { sendPushNotification, sendPushNotifications } from '../services/pushNotification.service.js';
+import { notifyUser, notifyUsers } from '../services/notification.service.js';
 
 /**
  * @desc    Create a new leave request
@@ -31,6 +31,13 @@ export const createLeaveRequest = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Return date must be on or after the out date',
+      });
+    }
+
+    if (outDateObj.getTime() === inDateObj.getTime() && outTime && inTime && inTime < outTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'For same-day outings, in time must be on or after out time',
       });
     }
 
@@ -72,12 +79,23 @@ export const createLeaveRequest = async (req, res) => {
       }
     });
 
-    // Notify wardens via socket + push about new leave request; also push parent
+    // Notify wardens + parent via DB history + socket + push.
     try {
       const io = getIO();
       const wardens = await User.find({ role: 'warden', institutionId: req.user.institutionId });
       const studentName = leave.studentId?.userId?.name || 'Unknown';
       const room = leave.studentId?.room || '';
+
+      await notifyUsers(wardens.map((warden) => ({
+        institutionId: req.user.institutionId,
+        userId: warden._id,
+        type: 'leave',
+        title: `New ${leave.type} Request`,
+        message: `${studentName}${room ? ` (Room ${room})` : ''} submitted a ${leave.type.toLowerCase()} request.`,
+        referenceId: leave._id,
+        socketEvent: 'notification:new',
+        pushData: { type: 'leave', leaveId: String(leave._id) },
+      })));
 
       if (io) {
         wardens.forEach(warden => {
@@ -92,27 +110,19 @@ export const createLeaveRequest = async (req, res) => {
         });
       }
 
-      // Push to wardens
-      const wardenTokens = wardens.map(w => w.expoPushToken).filter(Boolean);
-      await sendPushNotifications(
-        wardenTokens,
-        `New ${leave.type} Request`,
-        `${studentName}${room ? ` (Room ${room})` : ''} submitted a ${leave.type.toLowerCase()} request.`,
-        { type: 'leave', leaveId: String(leave._id) }
-      );
-
       // Push to parent
       const parentRecord = await Parent.findOne({ studentId: student._id });
       if (parentRecord) {
-        const parentUser = await User.findById(parentRecord.userId);
-        if (parentUser?.expoPushToken) {
-          await sendPushNotification(
-            parentUser.expoPushToken,
-            `${leave.type} Request Submitted`,
-            `${studentName} has submitted a ${leave.type.toLowerCase()} request that needs your approval.`,
-            { type: 'leave', leaveId: String(leave._id) }
-          );
-        }
+        await notifyUser({
+          institutionId: req.user.institutionId,
+          userId: parentRecord.userId,
+          type: 'leave',
+          title: `${leave.type} Request Submitted`,
+          message: `${studentName} has submitted a ${leave.type.toLowerCase()} request that needs your approval.`,
+          referenceId: leave._id,
+          socketEvent: 'notification:new',
+          pushData: { type: 'leave', leaveId: String(leave._id) },
+        });
       }
     } catch (socketError) {
       console.error('Socket emit error (leave):', socketError);
@@ -343,8 +353,19 @@ export const parentApproveOrReject = async (req, res) => {
       const studentName = populated.studentId?.userId?.name || 'Unknown';
 
       if (status === 'Approved') {
-        // Socket + push to wardens: leave is ready for warden approval
+        // Notify wardens that leave is ready for final approval.
         const wardens = await User.find({ role: 'warden', institutionId: req.user.institutionId });
+        await notifyUsers(wardens.map((warden) => ({
+          institutionId: req.user.institutionId,
+          userId: warden._id,
+          type: 'leave',
+          title: 'Leave Ready for Approval',
+          message: `Parent approved ${studentName}'s ${populated.type.toLowerCase()} request. Awaiting warden approval.`,
+          referenceId: leave._id,
+          socketEvent: 'notification:new',
+          pushData: { type: 'leave', leaveId: String(leave._id), status: populated.status },
+        })));
+
         if (io) {
           wardens.forEach(warden => {
             io.to(`warden_${warden._id}`).emit('leaveReadyForApproval', {
@@ -355,23 +376,28 @@ export const parentApproveOrReject = async (req, res) => {
             });
           });
         }
-        const wardenTokens = wardens.map(w => w.expoPushToken).filter(Boolean);
-        await sendPushNotifications(
-          wardenTokens,
-          'Leave Ready for Approval',
-          `Parent approved ${studentName}'s ${populated.type.toLowerCase()} request. Awaiting warden approval.`,
-          { type: 'leave', leaveId: String(leave._id) }
-        );
       } else {
-        // Parent rejected — push to student
-        const studentUser = await User.findById(populated.studentId?.userId?._id);
-        if (studentUser?.expoPushToken) {
-          await sendPushNotification(
-            studentUser.expoPushToken,
-            'Leave Request Rejected by Parent',
-            `Your ${populated.type.toLowerCase()} request was rejected by your parent.`,
-            { type: 'leave', leaveId: String(leave._id) }
-          );
+        // Parent rejected — notify student.
+        if (populated.studentId?.userId?._id) {
+          await notifyUser({
+            institutionId: req.user.institutionId,
+            userId: populated.studentId.userId._id,
+            type: 'leave',
+            title: 'Leave Request Rejected by Parent',
+            message: `Your ${populated.type.toLowerCase()} request was rejected by your parent.`,
+            referenceId: leave._id,
+            socketEvent: 'notification:new',
+            pushData: { type: 'leave', leaveId: String(leave._id), status: populated.status },
+          });
+
+          if (io) {
+            io.to(`student_${populated.studentId.userId._id}`).emit('leaveStatusUpdated', {
+              id: leave._id,
+              status: populated.status,
+              type: populated.type,
+              updatedBy: 'parent',
+            });
+          }
         }
       }
     } catch (socketError) {
@@ -473,8 +499,9 @@ export const updateLeaveStatus = async (req, res) => {
       });
     }
 
-    // Push notifications to student and parent about warden's decision
+    // Notify student and parent about warden's decision.
     try {
+      const io = getIO();
       const studentName = updated.studentId?.userId?.name || 'Unknown';
       const leaveType = updated.type || 'Leave';
       const notifTitle = status === 'Approved'
@@ -484,31 +511,54 @@ export const updateLeaveStatus = async (req, res) => {
         ? `Your ${leaveType.toLowerCase()} request has been approved by the warden.`
         : `Your ${leaveType.toLowerCase()} request was rejected by the warden.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`;
 
-      // Push to student
-      const studentUser = await User.findById(updated.studentId?.userId?._id);
-      if (studentUser?.expoPushToken) {
-        await sendPushNotification(
-          studentUser.expoPushToken,
-          notifTitle,
-          notifBody,
-          { type: 'leave', leaveId: String(updated._id), status }
-        );
+      // Notify student
+      if (updated.studentId?.userId?._id) {
+        await notifyUser({
+          institutionId: req.user.institutionId,
+          userId: updated.studentId.userId._id,
+          type: 'leave',
+          title: notifTitle,
+          message: notifBody,
+          referenceId: updated._id,
+          socketEvent: 'notification:new',
+          pushData: { type: 'leave', leaveId: String(updated._id), status },
+        });
+
+        if (io) {
+          io.to(`student_${updated.studentId.userId._id}`).emit('leaveStatusUpdated', {
+            id: updated._id,
+            status: updated.status,
+            type: updated.type,
+            updatedBy: 'warden',
+          });
+        }
       }
 
-      // Push to parent
+      // Notify parent
       const parentRecord = await Parent.findOne({ studentId: updated.studentId?._id });
       if (parentRecord) {
-        const parentUser = await User.findById(parentRecord.userId);
-        if (parentUser?.expoPushToken) {
-          const parentBody = status === 'Approved'
-            ? `${studentName}'s ${leaveType.toLowerCase()} request has been approved by the warden.`
-            : `${studentName}'s ${leaveType.toLowerCase()} request was rejected by the warden.`;
-          await sendPushNotification(
-            parentUser.expoPushToken,
-            notifTitle,
-            parentBody,
-            { type: 'leave', leaveId: String(updated._id), status }
-          );
+        const parentBody = status === 'Approved'
+          ? `${studentName}'s ${leaveType.toLowerCase()} request has been approved by the warden.`
+          : `${studentName}'s ${leaveType.toLowerCase()} request was rejected by the warden.`;
+
+        await notifyUser({
+          institutionId: req.user.institutionId,
+          userId: parentRecord.userId,
+          type: 'leave',
+          title: notifTitle,
+          message: parentBody,
+          referenceId: updated._id,
+          socketEvent: 'notification:new',
+          pushData: { type: 'leave', leaveId: String(updated._id), status },
+        });
+
+        if (io) {
+          io.to(`parent_${parentRecord.userId}`).emit('leaveStatusUpdated', {
+            id: updated._id,
+            status: updated.status,
+            type: updated.type,
+            updatedBy: 'warden',
+          });
         }
       }
     } catch (pushError) {

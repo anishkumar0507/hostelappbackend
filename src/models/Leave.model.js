@@ -21,7 +21,16 @@ const leaveSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ['Home Visit', 'Local Coaching/Classes', 'Medical Checkup', 'Local Market/Personal', 'Emergency Leave', 'Other'],
+      enum: [
+        'Home Visit',
+        'Local Outing',
+        'Medical',
+        'Local Coaching/Classes',
+        'Medical Checkup',
+        'Local Market/Personal',
+        'Emergency Leave',
+        'Other',
+      ],
     },
     status: {
       type: String,
@@ -91,10 +100,10 @@ const leaveSchema = new mongoose.Schema(
   }
 );
 
-// Validation: inDate should be after outDate
+// Validation: inDate should be on or after outDate.
 leaveSchema.pre('save', function(next) {
   if (this.inDate < this.outDate) {
-    next(new Error('Return date must be after outing date'));
+    next(new Error('Return date must be on or after outing date'));
   }
   next();
 });

@@ -1,9 +1,8 @@
 import Complaint from '../models/Complaint.model.js';
 import Student from '../models/Student.model.js';
 import User from '../models/User.model.js';
-import Notification from '../models/Notification.model.js';
 import { getIO } from '../utils/socket.js';
-import { sendPushNotification, sendPushNotifications } from '../services/pushNotification.service.js';
+import { notifyUser, notifyUsers } from '../services/notification.service.js';
 
 /**
  * @desc    Create a new complaint
@@ -55,21 +54,17 @@ export const createComplaint = async (req, res) => {
     // NOTIFICATION: Notify all wardens about new complaint
     try {
       const wardens = await User.find({ role: 'warden', institutionId: req.user.institutionId });
-      
-      // Create notifications for all wardens
-      const notifications = wardens.map(warden => ({
+
+      await notifyUsers(wardens.map((warden) => ({
         institutionId: req.user.institutionId,
         userId: warden._id,
         type: 'complaint',
         title: 'New Complaint Received',
         message: `${complaint.studentId.userId.name} raised a complaint: "${title.trim()}"`,
-        relatedId: complaint._id,
-        isRead: false,
-      }));
-
-      if (notifications.length > 0) {
-        await Notification.insertMany(notifications);
-      }
+        referenceId: complaint._id,
+        socketEvent: 'notification:new',
+        pushData: { type: 'complaint', complaintId: String(complaint._id) },
+      })));
 
       // Emit real-time socket notification to wardens
       const io = getIO();
@@ -85,17 +80,6 @@ export const createComplaint = async (req, res) => {
           });
         });
       }
-
-      // Push notifications to all wardens
-      const wardenTokens = wardens.map(w => w.expoPushToken).filter(Boolean);
-      const studentName = complaint.studentId.userId.name;
-      const room = complaint.studentId.room || '';
-      await sendPushNotifications(
-        wardenTokens,
-        'New Complaint Received',
-        `${studentName}${room ? ` (Room ${room})` : ''}: ${title.trim()}`,
-        { type: 'complaint', complaintId: String(complaint._id) }
-      );
     } catch (notifError) {
       console.error('Notification error:', notifError);
       // Don't fail the request if notification fails
@@ -291,19 +275,23 @@ export const updateComplaintStatus = async (req, res) => {
       }
 
       // Push notification to the student
-      const studentUser = await User.findById(complaint.studentId?.userId?._id);
-      if (studentUser?.expoPushToken) {
-        const statusMsg = status === 'Resolved'
-          ? `Your complaint "${complaint.title}" has been resolved.`
-          : status === 'Rejected'
-            ? `Your complaint "${complaint.title}" was rejected.`
-            : `Your complaint "${complaint.title}" is now In Progress.`;
-        await sendPushNotification(
-          studentUser.expoPushToken,
-          'Complaint Status Updated',
-          statusMsg,
-          { type: 'complaint', complaintId: String(complaint._id), status }
-        );
+      const statusMsg = status === 'Resolved'
+        ? `Your complaint "${complaint.title}" has been resolved.`
+        : status === 'Rejected'
+          ? `Your complaint "${complaint.title}" was rejected.`
+          : `Your complaint "${complaint.title}" is now In Progress.`;
+
+      if (complaint.studentId?.userId?._id) {
+        await notifyUser({
+          institutionId: req.user.institutionId,
+          userId: complaint.studentId.userId._id,
+          type: 'complaint',
+          title: 'Complaint Status Updated',
+          message: statusMsg,
+          referenceId: complaint._id,
+          socketEvent: 'notification:new',
+          pushData: { type: 'complaint', complaintId: String(complaint._id), status },
+        });
       }
     } catch (socketError) {
       console.error('Socket emit error (complaint update):', socketError);
