@@ -79,51 +79,24 @@ export const createLeaveRequest = async (req, res) => {
       }
     });
 
-    // Notify wardens + parent via DB history + socket + push.
+    // Notify all linked parents. Wardens are notified after parent approval.
     try {
-      const io = getIO();
-      const wardens = await User.find({ role: 'warden', institutionId: req.user.institutionId });
       const studentName = leave.studentId?.userId?.name || 'Unknown';
-      const room = leave.studentId?.room || '';
-
-      await notifyUsers(wardens.map((warden) => ({
+      const parentRecords = await Parent.find({
+        studentId: student._id,
         institutionId: req.user.institutionId,
-        userId: warden._id,
+      });
+
+      await notifyUsers(parentRecords.map((parentRecord) => ({
+        institutionId: req.user.institutionId,
+        userId: parentRecord.userId,
         type: 'leave',
-        title: `New ${leave.type} Request`,
-        message: `${studentName}${room ? ` (Room ${room})` : ''} submitted a ${leave.type.toLowerCase()} request.`,
+        title: `${leave.type} Request Submitted`,
+        message: `${studentName} has submitted a ${leave.type.toLowerCase()} request that needs your approval.`,
         referenceId: leave._id,
         socketEvent: 'notification:new',
         pushData: { type: 'leave', leaveId: String(leave._id) },
       })));
-
-      if (io) {
-        wardens.forEach(warden => {
-          io.to(`warden_${warden._id}`).emit('newLeaveRequest', {
-            id: leave._id,
-            studentName,
-            type: leave.type,
-            outDate: leave.outDate,
-            inDate: leave.inDate,
-            status: leave.status,
-          });
-        });
-      }
-
-      // Push to parent
-      const parentRecord = await Parent.findOne({ studentId: student._id });
-      if (parentRecord) {
-        await notifyUser({
-          institutionId: req.user.institutionId,
-          userId: parentRecord.userId,
-          type: 'leave',
-          title: `${leave.type} Request Submitted`,
-          message: `${studentName} has submitted a ${leave.type.toLowerCase()} request that needs your approval.`,
-          referenceId: leave._id,
-          socketEvent: 'notification:new',
-          pushData: { type: 'leave', leaveId: String(leave._id) },
-        });
-      }
     } catch (socketError) {
       console.error('Socket emit error (leave):', socketError);
     }
@@ -150,9 +123,10 @@ export const createLeaveRequest = async (req, res) => {
     });
   } catch (error) {
     console.error('Create leave error:', error);
-    res.status(500).json({
+    const isValidationError = error?.name === 'ValidationError' || error?.name === 'CastError';
+    res.status(isValidationError ? 400 : 500).json({
       success: false,
-      message: 'Server error while creating leave request',
+      message: isValidationError ? error.message : 'Server error while creating leave request',
     });
   }
 };
@@ -534,14 +508,18 @@ export const updateLeaveStatus = async (req, res) => {
         }
       }
 
-      // Notify parent
-      const parentRecord = await Parent.findOne({ studentId: updated.studentId?._id });
-      if (parentRecord) {
+      // Notify all linked parents
+      const parentRecords = await Parent.find({
+        studentId: updated.studentId?._id,
+        institutionId: req.user.institutionId,
+      });
+
+      if (parentRecords.length > 0) {
         const parentBody = status === 'Approved'
           ? `${studentName}'s ${leaveType.toLowerCase()} request has been approved by the warden.`
           : `${studentName}'s ${leaveType.toLowerCase()} request was rejected by the warden.`;
 
-        await notifyUser({
+        await notifyUsers(parentRecords.map((parentRecord) => ({
           institutionId: req.user.institutionId,
           userId: parentRecord.userId,
           type: 'leave',
@@ -550,14 +528,16 @@ export const updateLeaveStatus = async (req, res) => {
           referenceId: updated._id,
           socketEvent: 'notification:new',
           pushData: { type: 'leave', leaveId: String(updated._id), status },
-        });
+        })));
 
         if (io) {
-          io.to(`parent_${parentRecord.userId}`).emit('leaveStatusUpdated', {
-            id: updated._id,
-            status: updated.status,
-            type: updated.type,
-            updatedBy: 'warden',
+          parentRecords.forEach((parentRecord) => {
+            io.to(`parent_${parentRecord.userId}`).emit('leaveStatusUpdated', {
+              id: updated._id,
+              status: updated.status,
+              type: updated.type,
+              updatedBy: 'warden',
+            });
           });
         }
       }

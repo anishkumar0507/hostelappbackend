@@ -1,5 +1,6 @@
 import express from 'express';
 import {
+  initiateChat,
   getMyChat,
   sendMessage,
   getWardenChats,
@@ -12,6 +13,8 @@ import { authorize } from '../middleware/role.middleware.js';
 const router = express.Router();
 
 router.use(protect);
+
+router.post('/initiate', authorize('parent', 'warden'), initiateChat);
 
 // Parent chat
 router.get('/', authorize('parent'), getMyChat);

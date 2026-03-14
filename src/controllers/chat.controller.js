@@ -1,6 +1,5 @@
 import Chat from '../models/Chat.model.js';
 import Parent from '../models/Parent.model.js';
-import Student from '../models/Student.model.js';
 import User from '../models/User.model.js';
 import { getIO } from '../utils/socket.js';
 import { notifyUser } from '../services/notification.service.js';
@@ -11,6 +10,7 @@ import { notifyUser } from '../services/notification.service.js';
 const getOrCreateChat = async (parentUserId, wardenUserId, studentId, institutionId) => {
   let chat = await Chat.findOne({
     parentId: parentUserId,
+    wardenId: wardenUserId,
     studentId,
     institutionId,
   }).populate('wardenId', 'name');
@@ -27,6 +27,142 @@ const getOrCreateChat = async (parentUserId, wardenUserId, studentId, institutio
   return chat;
 };
 
+const formatMessage = (message) => ({
+  id: message._id,
+  senderId: message.senderId?._id,
+  senderName: message.senderId?.name,
+  senderRole: message.senderId?.role,
+  text: message.text,
+  createdAt: message.createdAt,
+});
+
+const formatParentChat = (chat) => ({
+  id: chat._id,
+  studentId: chat.studentId,
+  warden: chat.wardenId ? { id: chat.wardenId._id, name: chat.wardenId.name } : null,
+  messages: (chat.messages || []).map(formatMessage),
+});
+
+const formatWardenChat = (chat) => ({
+  id: chat._id,
+  parent: chat.parentId,
+  student: chat.studentId,
+  messages: (chat.messages || []).map(formatMessage),
+});
+
+const getParentProfile = async (userId, institutionId) => {
+  return Parent.findOne({ userId, institutionId });
+};
+
+const getParentChatById = async (chatId, parentUserId, institutionId) => {
+  return Chat.findOne({ _id: chatId, parentId: parentUserId, institutionId })
+    .populate('wardenId', 'name')
+    .populate('messages.senderId', 'name role');
+};
+
+const getWardenChatRecord = async (chatId, institutionId) => {
+  return Chat.findOne({ _id: chatId, institutionId })
+    .populate('parentId', 'name email')
+    .populate('wardenId', 'name')
+    .populate('studentId')
+    .populate('studentId.userId', 'name')
+    .populate('messages.senderId', 'name role');
+};
+
+/**
+ * @desc    Create or fetch a chat using an explicit receiver
+ * @route   POST /api/chats/initiate
+ * @access  Private (Parent or Warden)
+ */
+export const initiateChat = async (req, res) => {
+  try {
+    const { receiverId } = req.body;
+
+    if (!receiverId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide receiverId',
+      });
+    }
+
+    if (req.user.role === 'warden') {
+      const parentRecord = await Parent.findOne({
+        userId: receiverId,
+        institutionId: req.user.institutionId,
+      });
+
+      if (!parentRecord) {
+        return res.status(404).json({
+          success: false,
+          message: 'Parent not found',
+        });
+      }
+
+      const chat = await getOrCreateChat(
+        receiverId,
+        req.user._id,
+        parentRecord.studentId,
+        req.user.institutionId
+      );
+
+      const populatedChat = await getWardenChatRecord(chat._id, req.user.institutionId);
+
+      return res.status(200).json({
+        success: true,
+        data: formatWardenChat(populatedChat),
+      });
+    }
+
+    if (req.user.role === 'parent') {
+      const parent = await getParentProfile(req.user._id, req.user.institutionId);
+      if (!parent) {
+        return res.status(404).json({
+          success: false,
+          message: 'Parent profile not found',
+        });
+      }
+
+      const warden = await User.findOne({
+        _id: receiverId,
+        role: 'warden',
+        institutionId: req.user.institutionId,
+      });
+
+      if (!warden) {
+        return res.status(404).json({
+          success: false,
+          message: 'Warden not found',
+        });
+      }
+
+      const chat = await getOrCreateChat(
+        req.user._id,
+        warden._id,
+        parent.studentId,
+        req.user.institutionId
+      );
+
+      const populatedChat = await getParentChatById(chat._id, req.user._id, req.user.institutionId);
+
+      return res.status(200).json({
+        success: true,
+        data: formatParentChat(populatedChat),
+      });
+    }
+
+    return res.status(403).json({
+      success: false,
+      message: 'Not authorized to initiate chat',
+    });
+  } catch (error) {
+    console.error('initiateChat error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Server error',
+    });
+  }
+};
+
 /**
  * @desc    Parent: Get or create chat with warden for their child
  * @route   GET /api/chat
@@ -34,7 +170,9 @@ const getOrCreateChat = async (parentUserId, wardenUserId, studentId, institutio
  */
 export const getMyChat = async (req, res) => {
   try {
-    const parent = await Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId });
+    const { receiverId, chatId } = req.query;
+
+    const parent = await getParentProfile(req.user._id, req.user.institutionId);
     if (!parent) {
       return res.status(404).json({
         success: false,
@@ -42,42 +180,40 @@ export const getMyChat = async (req, res) => {
       });
     }
 
-    // Get any warden - for simplicity, we use the first one
-    // In production, you might have multiple wardens; we'll get the chat that exists or create with a default
-    const student = await Student.findOne({ _id: parent.studentId, institutionId: req.user.institutionId });
-    if (!student) {
-      return res.status(404).json({
-        success: false,
-        message: 'Student not found',
-      });
-    }
+    let chat = null;
 
-    const warden = await User.findOne({ role: 'warden', institutionId: req.user.institutionId });
-    if (!warden) {
-      return res.status(404).json({
-        success: false,
-        message: 'No warden available',
+    if (chatId) {
+      chat = await getParentChatById(chatId, req.user._id, req.user.institutionId);
+    } else if (receiverId) {
+      const warden = await User.findOne({
+        _id: receiverId,
+        role: 'warden',
+        institutionId: req.user.institutionId,
       });
-    }
 
-    const chat = await getOrCreateChat(req.user._id, warden._id, parent.studentId, req.user.institutionId);
-    await chat.populate('messages.senderId', 'name role');
+      if (!warden) {
+        return res.status(404).json({
+          success: false,
+          message: 'Warden not found',
+        });
+      }
+
+      const currentChat = await getOrCreateChat(req.user._id, warden._id, parent.studentId, req.user.institutionId);
+      chat = await getParentChatById(currentChat._id, req.user._id, req.user.institutionId);
+    } else {
+      chat = await Chat.findOne({
+        parentId: req.user._id,
+        studentId: parent.studentId,
+        institutionId: req.user.institutionId,
+      })
+        .sort({ updatedAt: -1 })
+        .populate('wardenId', 'name')
+        .populate('messages.senderId', 'name role');
+    }
 
     res.status(200).json({
       success: true,
-      data: {
-        id: chat._id,
-        studentId: chat.studentId,
-        warden: chat.wardenId ? { id: chat.wardenId._id, name: chat.wardenId.name } : null,
-        messages: (chat.messages || []).map((m) => ({
-          id: m._id,
-          senderId: m.senderId?._id,
-          senderName: m.senderId?.name,
-          senderRole: m.senderId?.role,
-          text: m.text,
-          createdAt: m.createdAt,
-        })),
-      },
+      data: chat ? formatParentChat(chat) : null,
     });
   } catch (error) {
     console.error('getMyChat error:', error);
@@ -95,7 +231,7 @@ export const getMyChat = async (req, res) => {
  */
 export const sendMessage = async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, chatId, receiverId } = req.body;
 
     if (!text || typeof text !== 'string' || !text.trim()) {
       return res.status(400).json({
@@ -104,23 +240,51 @@ export const sendMessage = async (req, res) => {
       });
     }
 
-    const parent = await Parent.findOne({ userId: req.user._id, institutionId: req.user.institutionId });
-    if (!parent) {
-      return res.status(404).json({
+    let chat = null;
+
+    if (chatId) {
+      chat = await Chat.findOne({
+        _id: chatId,
+        parentId: req.user._id,
+        institutionId: req.user.institutionId,
+      });
+    } else if (receiverId) {
+      const parent = await getParentProfile(req.user._id, req.user.institutionId);
+      if (!parent) {
+        return res.status(404).json({
+          success: false,
+          message: 'Parent profile not found',
+        });
+      }
+
+      const warden = await User.findOne({
+        _id: receiverId,
+        role: 'warden',
+        institutionId: req.user.institutionId,
+      });
+
+      if (!warden) {
+        return res.status(404).json({
+          success: false,
+          message: 'Warden not found',
+        });
+      }
+
+      chat = await getOrCreateChat(req.user._id, warden._id, parent.studentId, req.user.institutionId);
+    } else {
+      return res.status(400).json({
         success: false,
-        message: 'Parent profile not found',
+        message: 'Please provide chatId or receiverId',
       });
     }
 
-    const warden = await User.findOne({ role: 'warden', institutionId: req.user.institutionId });
-    if (!warden) {
+    if (!chat) {
       return res.status(404).json({
         success: false,
-        message: 'No warden available',
+        message: 'Chat not found',
       });
     }
 
-    const chat = await getOrCreateChat(req.user._id, warden._id, parent.studentId, req.user.institutionId);
     chat.messages = chat.messages || [];
     chat.messages.push({
       senderId: req.user._id,
@@ -146,12 +310,12 @@ export const sendMessage = async (req, res) => {
     try {
       const io = getIO();
       if (io) {
-        io.to(`warden_${warden._id}`).emit('newChatMessage', messageData);
+        io.to(`warden_${chat.wardenId}`).emit('newChatMessage', messageData);
       }
 
       await notifyUser({
         institutionId: req.user.institutionId,
-        userId: warden._id,
+        userId: chat.wardenId,
         type: 'chat',
         title: 'New Message from Parent',
         message: `${messageData.senderName}: ${lastMsg.text}`,
@@ -225,12 +389,7 @@ export const getWardenChats = async (req, res) => {
  */
 export const getWardenChatById = async (req, res) => {
   try {
-    const chat = await Chat.findOne({ _id: req.params.chatId, institutionId: req.user.institutionId })
-      .populate('parentId', 'name email')
-      .populate('wardenId', 'name')
-      .populate('studentId')
-      .populate('studentId.userId', 'name')
-      .populate('messages.senderId', 'name role');
+    const chat = await getWardenChatRecord(req.params.chatId, req.user.institutionId);
 
     if (!chat) {
       return res.status(404).json({
@@ -248,19 +407,7 @@ export const getWardenChatById = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: {
-        id: chat._id,
-        parent: chat.parentId,
-        student: chat.studentId,
-        messages: (chat.messages || []).map((m) => ({
-          id: m._id,
-          senderId: m.senderId?._id,
-          senderName: m.senderId?.name,
-          senderRole: m.senderId?.role,
-          text: m.text,
-          createdAt: m.createdAt,
-        })),
-      },
+      data: formatWardenChat(chat),
     });
   } catch (error) {
     console.error('getWardenChatById error:', error);

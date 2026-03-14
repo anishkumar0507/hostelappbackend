@@ -103,7 +103,7 @@ const leaveSchema = new mongoose.Schema(
 // Validation: inDate should be on or after outDate.
 leaveSchema.pre('save', function(next) {
   if (this.inDate < this.outDate) {
-    next(new Error('Return date must be on or after outing date'));
+    return next(new Error('Return date must be on or after outing date'));
   }
   next();
 });

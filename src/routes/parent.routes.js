@@ -1,5 +1,6 @@
 import express from 'express';
 import {
+  getAllParents,
   registerParent,
   getMyChild,
   getChildRoom,
@@ -19,6 +20,7 @@ router.use(protect);
 /**
  * Warden: Register parent for a student
  */
+router.get('/', authorize('warden'), getAllParents);
 router.post('/register', authorize('warden'), registerParent);
 
 /**

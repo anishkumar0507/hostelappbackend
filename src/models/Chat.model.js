@@ -50,8 +50,7 @@ const chatSchema = new mongoose.Schema(
   }
 );
 
-chatSchema.index({ institutionId: 1, parentId: 1, studentId: 1 }, { unique: true });
-chatSchema.index({ institutionId: 1, wardenId: 1, studentId: 1 });
+chatSchema.index({ institutionId: 1, parentId: 1, studentId: 1, wardenId: 1 }, { unique: true });
 
 const Chat = mongoose.model('Chat', chatSchema);
 

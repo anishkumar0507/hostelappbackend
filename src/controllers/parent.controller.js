@@ -21,6 +21,42 @@ const getParentStudentId = async (userId, institutionId) => {
 };
 
 /**
+ * @desc    Get all parents for the institution
+ * @route   GET /api/parents
+ * @access  Private (Warden only)
+ */
+export const getAllParents = async (req, res) => {
+  try {
+    const parents = await Parent.find({ institutionId: req.user.institutionId })
+      .populate('userId', 'name')
+      .populate({
+        path: 'studentId',
+        select: 'guardianPhone userId',
+        populate: {
+          path: 'userId',
+          select: 'name',
+        },
+      })
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      data: parents.map((parent) => ({
+        parentId: parent.userId?._id,
+        parentName: parent.userId?.name || 'Unknown Parent',
+        studentName: parent.studentId?.userId?.name || 'Unknown Student',
+        phone: parent.studentId?.guardianPhone || 'N/A',
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Server error',
+    });
+  }
+};
+
+/**
  * @desc    Register parent for a student (warden only)
  * @route   POST /api/parent/register
  * @access  Private (Warden only)
