@@ -4,6 +4,56 @@ import MenuReview from '../models/MenuReview.model.js';
 import Student from '../models/Student.model.js';
 import Poll from '../models/Poll.model.js';
 import PollVote from '../models/PollVote.model.js';
+import User from '../models/User.model.js';
+import { notifyUsers } from '../services/notification.service.js';
+
+const notifyWardensMenuFeedback = async ({ institutionId, menuId, mealType, actorName, actionLabel }) => {
+  try {
+    const wardens = await User.find({ institutionId, role: 'warden' }).select('_id');
+    if (!wardens.length) return;
+
+    await notifyUsers(
+      wardens.map((warden) => ({
+        institutionId,
+        userId: warden._id,
+        type: 'feedback',
+        title: 'New Menu Feedback',
+        message: `${actorName} submitted ${actionLabel} feedback for ${mealType}.`,
+        referenceId: menuId,
+        pushData: { type: 'feedback', menuId: String(menuId) },
+      }))
+    );
+  } catch (error) {
+    console.error('Menu feedback notification error:', error);
+  }
+};
+
+const notifyStudentsMenuPublished = async ({ institutionId, menu }) => {
+  try {
+    const students = await User.find({ institutionId, role: 'student' }).select('_id');
+    if (!students.length) return;
+
+    const menuDateLabel = new Date(menu.menuDate).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+
+    await notifyUsers(
+      students.map((studentUser) => ({
+        institutionId,
+        userId: studentUser._id,
+        type: 'menu',
+        title: 'New Menu Published',
+        message: `The menu for ${menuDateLabel} is now available.`,
+        referenceId: menu._id,
+        pushData: { type: 'menu', menuId: String(menu._id) },
+      }))
+    );
+  } catch (error) {
+    console.error('Menu publish notification error:', error);
+  }
+};
 
 /**
  * @desc    Get all polls with voter details per option
@@ -541,6 +591,14 @@ export const voteOnMenu = async (req, res) => {
         existingVote.date = normalizedVoteDate;
         await existingVote.save();
 
+        await notifyWardensMenuFeedback({
+          institutionId: req.user.institutionId,
+          menuId,
+          mealType,
+          actorName: studentName.trim(),
+          actionLabel: voteType,
+        });
+
         return res.status(200).json({
           success: true,
           message: 'Vote updated successfully',
@@ -559,6 +617,14 @@ export const voteOnMenu = async (req, res) => {
         voteType,
         rating,
         date: normalizedVoteDate,
+      });
+
+      await notifyWardensMenuFeedback({
+        institutionId: req.user.institutionId,
+        menuId,
+        mealType,
+        actorName: studentName.trim(),
+        actionLabel: voteType,
       });
 
       return res.status(201).json({
@@ -582,6 +648,14 @@ export const voteOnMenu = async (req, res) => {
           raceVote.studentName = studentName.trim();
           raceVote.date = normalizedVoteDate;
           await raceVote.save();
+
+          await notifyWardensMenuFeedback({
+            institutionId: req.user.institutionId,
+            menuId,
+            mealType,
+            actorName: studentName.trim(),
+            actionLabel: voteType,
+          });
 
           return res.status(200).json({
             success: true,
@@ -893,6 +967,20 @@ export const addReview = async (req, res) => {
       .populate('studentId', 'name')
       .populate('userId', 'name');
 
+    const actorName =
+      `${student.firstName || ''} ${student.lastName || ''}`.trim() ||
+      student.rollNumber ||
+      req.user.name ||
+      'A student';
+
+    await notifyWardensMenuFeedback({
+      institutionId: req.user.institutionId,
+      menuId,
+      mealType,
+      actorName,
+      actionLabel: 'review',
+    });
+
     res.status(201).json({
       success: true,
       message: 'Review added successfully',
@@ -973,6 +1061,11 @@ export const publishMenu = async (req, res) => {
 
     menu.status = 'published';
     await menu.save();
+
+    await notifyStudentsMenuPublished({
+      institutionId: req.user.institutionId,
+      menu,
+    });
 
     res.status(200).json({
       success: true,

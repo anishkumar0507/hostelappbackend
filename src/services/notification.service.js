@@ -3,6 +3,30 @@ import User from '../models/User.model.js';
 import { getIO } from '../utils/socket.js';
 import { sendPushNotification } from './pushNotification.service.js';
 
+const resolveNavigationMeta = ({ type, referenceId, pushData = {}, navigation = {} }) => {
+  const fallbackTargetId =
+    pushData.targetId ||
+    pushData.complaintId ||
+    pushData.leaveId ||
+    pushData.chatId ||
+    pushData.menuId ||
+    (referenceId ? String(referenceId) : undefined);
+
+  const byType = {
+    complaint: 'ComplaintDetails',
+    leave: 'LeaveRequest',
+    chat: 'Chat',
+    menu: 'Menu',
+    feedback: 'Menu',
+  };
+
+  return {
+    screen: navigation.screen || pushData.screen || byType[type] || 'Home',
+    targetId: navigation.targetId || fallbackTargetId,
+    params: navigation.params || pushData.params || {},
+  };
+};
+
 // Emit only to the user-specific room to avoid duplicate events.
 // Role-specific room events (newComplaint, leaveStatusUpdated, etc.) are
 // dispatched directly by the controllers where more context is available.
@@ -22,9 +46,17 @@ export const notifyUser = async ({
   socketEvent = 'notification:new',
   socketPayload = {},
   pushData = {},
+  navigation = {},
 }) => {
   const user = await User.findById(userId).select('role expoPushToken');
   if (!user) return null;
+
+  const navigationMeta = resolveNavigationMeta({
+    type,
+    referenceId,
+    pushData,
+    navigation,
+  });
 
   console.log('[notification] Sending notification to user:', user._id, '| role:', user.role, '| title:', title);
 
@@ -36,6 +68,7 @@ export const notifyUser = async ({
     message,
     referenceId,
     relatedId: referenceId,
+    navigation: navigationMeta,
     isRead: false,
   });
 
@@ -45,7 +78,16 @@ export const notifyUser = async ({
     notification,
   });
 
-  await sendPushNotification(user.expoPushToken, title, message, pushData);
+  await sendPushNotification(user.expoPushToken, title, message, {
+    title,
+    message,
+    type,
+    targetId: navigationMeta.targetId,
+    screen: navigationMeta.screen,
+    params: navigationMeta.params,
+    referenceId: referenceId ? String(referenceId) : undefined,
+    ...pushData,
+  });
   return notification;
 };
 

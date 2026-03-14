@@ -16,7 +16,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['complaint', 'leave', 'fee', 'chat', 'general'],
+      enum: ['complaint', 'leave', 'fee', 'chat', 'menu', 'feedback', 'general'],
       required: true,
     },
     title: {
@@ -43,6 +43,11 @@ const notificationSchema = new mongoose.Schema(
     },
     readAt: {
       type: Date,
+    },
+    navigation: {
+      screen: { type: String, trim: true },
+      targetId: { type: String, trim: true },
+      params: { type: mongoose.Schema.Types.Mixed },
     },
   },
   {
