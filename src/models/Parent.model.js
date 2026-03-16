@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 
 /**
  * Parent model - links a parent User to exactly one Student.
- * One student can have multiple parents (e.g., mother, father).
+ * One student can have only one parent/guardian record.
  * Parent accounts are created ONLY by warden - no public signup.
  */
 const parentSchema = new mongoose.Schema(
@@ -40,7 +40,7 @@ const parentSchema = new mongoose.Schema(
 );
 
 // Index for efficient lookups
-parentSchema.index({ studentId: 1, institutionId: 1 });
+parentSchema.index({ studentId: 1, institutionId: 1 }, { unique: true });
 parentSchema.index({ institutionId: 1, userId: 1 }, { unique: true });
 
 const Parent = mongoose.model('Parent', parentSchema);

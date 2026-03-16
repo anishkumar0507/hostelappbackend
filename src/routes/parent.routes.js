@@ -2,6 +2,7 @@ import express from 'express';
 import {
   getAllParents,
   updateParent,
+  deleteParent,
   registerParent,
   getMyChild,
   getChildRoom,
@@ -23,6 +24,7 @@ router.use(protect);
  */
 router.get('/', authorize('warden'), getAllParents);
 router.put('/:parentId', authorize('warden'), updateParent);
+router.delete('/:parentId', authorize('warden'), deleteParent);
 router.post('/register', authorize('warden'), registerParent);
 
 /**

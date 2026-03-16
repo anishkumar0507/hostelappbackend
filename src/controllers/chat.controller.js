@@ -43,12 +43,34 @@ const formatParentChat = (chat) => ({
   messages: (chat.messages || []).map(formatMessage),
 });
 
-const formatWardenChat = (chat) => ({
+const formatWardenChat = (chat, parentProfile = null) => ({
   id: chat._id,
-  parent: chat.parentId,
+  parent: chat.parentId
+    ? {
+        id: chat.parentId._id,
+        name: chat.parentId.name,
+        email: chat.parentId.email,
+        phone: parentProfile?.phone || null,
+        relationship: parentProfile?.relationship || 'Guardian',
+      }
+    : null,
   student: chat.studentId,
   messages: (chat.messages || []).map(formatMessage),
 });
+
+const getParentProfilesMap = async (parentUserIds, institutionId) => {
+  const uniqueIds = [...new Set(parentUserIds.map((id) => String(id)).filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return new Map();
+  }
+
+  const parentProfiles = await Parent.find({
+    userId: { $in: uniqueIds },
+    institutionId,
+  }).select('userId phone relationship');
+
+  return new Map(parentProfiles.map((profile) => [String(profile.userId), profile]));
+};
 
 const getParentProfile = async (userId, institutionId) => {
   return Parent.findOne({ userId, institutionId });
@@ -107,9 +129,14 @@ export const initiateChat = async (req, res) => {
 
       const populatedChat = await getWardenChatRecord(chat._id, req.user.institutionId);
 
+      const parentProfile = await Parent.findOne({
+        userId: receiverId,
+        institutionId: req.user.institutionId,
+      }).select('phone relationship');
+
       return res.status(200).json({
         success: true,
-        data: formatWardenChat(populatedChat),
+        data: formatWardenChat(populatedChat, parentProfile),
       });
     }
 
@@ -353,9 +380,22 @@ export const getWardenChats = async (req, res) => {
       .populate('studentId.userId', 'name')
       .sort({ updatedAt: -1 });
 
+    const parentProfilesMap = await getParentProfilesMap(
+      chats.map((chat) => chat.parentId?._id || chat.parentId),
+      req.user.institutionId
+    );
+
     const result = chats.map((c) => ({
       id: c._id,
-      parent: c.parentId ? { id: c.parentId._id, name: c.parentId.name, email: c.parentId.email } : null,
+      parent: c.parentId
+        ? {
+            id: c.parentId._id,
+            name: c.parentId.name,
+            email: c.parentId.email,
+            phone: parentProfilesMap.get(String(c.parentId._id || c.parentId))?.phone || null,
+            relationship: parentProfilesMap.get(String(c.parentId._id || c.parentId))?.relationship || 'Guardian',
+          }
+        : null,
       student: c.studentId
         ? {
             id: c.studentId._id,
@@ -405,9 +445,14 @@ export const getWardenChatById = async (req, res) => {
       });
     }
 
+    const parentProfile = await Parent.findOne({
+      userId: chat.parentId?._id,
+      institutionId: req.user.institutionId,
+    }).select('phone relationship');
+
     res.status(200).json({
       success: true,
-      data: formatWardenChat(chat),
+      data: formatWardenChat(chat, parentProfile),
     });
   } catch (error) {
     console.error('getWardenChatById error:', error);

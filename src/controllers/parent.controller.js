@@ -1,6 +1,8 @@
 import User from '../models/User.model.js';
 import Student from '../models/Student.model.js';
 import Parent from '../models/Parent.model.js';
+import Chat from '../models/Chat.model.js';
+import Notification from '../models/Notification.model.js';
 import Leave from '../models/Leave.model.js';
 import Fee from '../models/Fee.model.js';
 import EntryExit from '../models/EntryExit.model.js';
@@ -205,6 +207,14 @@ export const registerParent = async (req, res) => {
       });
     }
 
+    const existingParentForStudent = await Parent.findOne({ studentId, institutionId });
+    if (existingParentForStudent) {
+      return res.status(400).json({
+        success: false,
+        message: 'Guardian already created for this student',
+      });
+    }
+
     const normalizedEmail = email.toLowerCase().trim();
 
     const existingUser = await User.findOne({ email: normalizedEmail, institutionId });
@@ -286,12 +296,60 @@ export const registerParent = async (req, res) => {
   } catch (error) {
     console.error('❌ registerParent error:', error);
     if (error.code === 11000) {
+      if (error?.keyPattern?.studentId || error?.keyValue?.studentId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Guardian already created for this student',
+        });
+      }
       return res.status(400).json({
         success: false,
         message: 'This parent is already linked to a student',
       });
     }
     res.status(500).json({
+      success: false,
+      message: error.message || 'Server error',
+    });
+  }
+};
+
+/**
+ * @desc    Delete parent and related records
+ * @route   DELETE /api/parents/:parentId
+ * @access  Private (Warden only)
+ */
+export const deleteParent = async (req, res) => {
+  try {
+    const { parentId } = req.params;
+    const institutionId = req.user.institutionId;
+
+    const parent = await Parent.findOne({
+      userId: parentId,
+      institutionId,
+    });
+
+    if (!parent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Parent not found',
+      });
+    }
+
+    await Promise.all([
+      Chat.deleteMany({ parentId, institutionId }),
+      Notification.deleteMany({ userId: parentId, institutionId }),
+      Parent.deleteOne({ _id: parent._id }),
+      User.deleteOne({ _id: parentId, institutionId, role: 'parent' }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Parent deleted successfully',
+    });
+  } catch (error) {
+    console.error('❌ deleteParent error:', error);
+    return res.status(500).json({
       success: false,
       message: error.message || 'Server error',
     });
