@@ -28,7 +28,7 @@ const getParentStudentId = async (userId, institutionId) => {
 export const getAllParents = async (req, res) => {
   try {
     const parents = await Parent.find({ institutionId: req.user.institutionId })
-      .populate('userId', 'name')
+      .populate('userId', 'name email')
       .populate({
         path: 'studentId',
         select: 'guardianPhone userId',
@@ -44,12 +44,118 @@ export const getAllParents = async (req, res) => {
       data: parents.map((parent) => ({
         parentId: parent.userId?._id,
         parentName: parent.userId?.name || 'Unknown Parent',
+        parentEmail: parent.userId?.email || '',
         studentName: parent.studentId?.userId?.name || 'Unknown Student',
         phone: parent.studentId?.guardianPhone || 'N/A',
+        relationship: parent.relationship || 'Guardian',
       })),
     });
   } catch (error) {
     res.status(500).json({
+      success: false,
+      message: error.message || 'Server error',
+    });
+  }
+};
+
+/**
+ * @desc    Update parent details
+ * @route   PUT /api/parents/:parentId
+ * @access  Private (Warden only)
+ */
+export const updateParent = async (req, res) => {
+  try {
+    const { parentId } = req.params;
+    const { parentName, parentEmail, phone, relationship } = req.body;
+
+    const parent = await Parent.findOne({
+      userId: parentId,
+      institutionId: req.user.institutionId,
+    }).populate('studentId', 'guardianPhone userId');
+
+    if (!parent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Parent not found',
+      });
+    }
+
+    const parentUser = await User.findOne({
+      _id: parentId,
+      institutionId: req.user.institutionId,
+      role: 'parent',
+    });
+
+    if (!parentUser) {
+      return res.status(404).json({
+        success: false,
+        message: 'Parent user not found',
+      });
+    }
+
+    if (parentName !== undefined) {
+      const nextName = String(parentName || '').trim();
+      if (!nextName) {
+        return res.status(400).json({ success: false, message: 'Parent name cannot be empty' });
+      }
+      parentUser.name = nextName;
+    }
+
+    if (parentEmail !== undefined) {
+      const nextEmail = String(parentEmail || '').toLowerCase().trim();
+      if (!nextEmail) {
+        return res.status(400).json({ success: false, message: 'Parent email cannot be empty' });
+      }
+      parentUser.email = nextEmail;
+    }
+
+    if (relationship !== undefined) {
+      parent.relationship = String(relationship || '').trim() || 'Guardian';
+    }
+
+    if (phone !== undefined && parent.studentId?._id) {
+      await Student.findByIdAndUpdate(parent.studentId._id, {
+        guardianPhone: String(phone || '').trim() || undefined,
+      });
+    }
+
+    await parentUser.save();
+    await parent.save();
+
+    const refreshed = await Parent.findOne({
+      userId: parentId,
+      institutionId: req.user.institutionId,
+    })
+      .populate('userId', 'name email')
+      .populate({
+        path: 'studentId',
+        select: 'guardianPhone userId',
+        populate: {
+          path: 'userId',
+          select: 'name',
+        },
+      });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Parent details updated successfully',
+      data: {
+        parentId: refreshed.userId?._id,
+        parentName: refreshed.userId?.name || 'Unknown Parent',
+        parentEmail: refreshed.userId?.email || '',
+        studentName: refreshed.studentId?.userId?.name || 'Unknown Student',
+        phone: refreshed.studentId?.guardianPhone || 'N/A',
+        relationship: refreshed.relationship || 'Guardian',
+      },
+    });
+  } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is already in use',
+      });
+    }
+    return res.status(500).json({
       success: false,
       message: error.message || 'Server error',
     });
