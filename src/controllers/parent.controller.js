@@ -46,7 +46,7 @@ export const getAllParents = async (req, res) => {
         parentName: parent.userId?.name || 'Unknown Parent',
         parentEmail: parent.userId?.email || '',
         studentName: parent.studentId?.userId?.name || 'Unknown Student',
-        phone: parent.studentId?.guardianPhone || 'N/A',
+        phone: parent.phone || parent.studentId?.guardianPhone || 'N/A',
         relationship: parent.relationship || 'Guardian',
       })),
     });
@@ -113,6 +113,10 @@ export const updateParent = async (req, res) => {
       parent.relationship = String(relationship || '').trim() || 'Guardian';
     }
 
+    if (phone !== undefined) {
+      parent.phone = String(phone || '').trim() || undefined;
+    }
+
     if (phone !== undefined && parent.studentId?._id) {
       await Student.findByIdAndUpdate(parent.studentId._id, {
         guardianPhone: String(phone || '').trim() || undefined,
@@ -144,7 +148,7 @@ export const updateParent = async (req, res) => {
         parentName: refreshed.userId?.name || 'Unknown Parent',
         parentEmail: refreshed.userId?.email || '',
         studentName: refreshed.studentId?.userId?.name || 'Unknown Student',
-        phone: refreshed.studentId?.guardianPhone || 'N/A',
+        phone: refreshed.phone || refreshed.studentId?.guardianPhone || 'N/A',
         relationship: refreshed.relationship || 'Guardian',
       },
     });
@@ -169,7 +173,7 @@ export const updateParent = async (req, res) => {
  */
 export const registerParent = async (req, res) => {
   try {
-    const { studentId, name, email, relationship } = req.body;
+    const { studentId, name, email, relationship, phone } = req.body;
     const institutionId = req.user?.institutionId;
     if (!institutionId) {
       return res.status(400).json({
@@ -239,6 +243,7 @@ export const registerParent = async (req, res) => {
       userId: user._id,
       studentId,
       relationship: relationship || 'Guardian',
+      phone: String(phone || '').trim() || undefined,
       institutionId,
     });
     await parentRecord.populate('studentId');
@@ -272,6 +277,7 @@ export const registerParent = async (req, res) => {
           name: user.name,
           email: user.email,
           relationship: parentRecord.relationship,
+          phone: parentRecord.phone || student.guardianPhone || null,
           studentId: student._id,
           studentName: student.userId?.name,
         },

@@ -29,6 +29,10 @@ const parentSchema = new mongoose.Schema(
       trim: true,
       default: 'Guardian',
     },
+    phone: {
+      type: String,
+      trim: true,
+    },
   },
   {
     timestamps: true,
