@@ -15,15 +15,45 @@ const getOrCreateChat = async (parentUserId, wardenUserId, studentId, institutio
     institutionId,
   }).populate('wardenId', 'name');
 
+  // Backward compatibility: some deployments still have a legacy unique index
+  // on (parentId, studentId), so reuse that chat regardless of wardenId.
   if (!chat) {
-    chat = await Chat.create({
+    chat = await Chat.findOne({
       parentId: parentUserId,
-      wardenId: wardenUserId,
       studentId,
       institutionId,
-    });
-    await chat.populate('wardenId', 'name');
+    })
+      .sort({ updatedAt: -1 })
+      .populate('wardenId', 'name');
   }
+
+  if (!chat) {
+    try {
+      chat = await Chat.create({
+        parentId: parentUserId,
+        wardenId: wardenUserId,
+        studentId,
+        institutionId,
+      });
+      await chat.populate('wardenId', 'name');
+    } catch (error) {
+      // Handle duplicate key races / legacy unique index collisions by loading existing chat.
+      if (error?.code === 11000) {
+        chat = await Chat.findOne({
+          parentId: parentUserId,
+          studentId,
+          institutionId,
+        })
+          .sort({ updatedAt: -1 })
+          .populate('wardenId', 'name');
+      }
+
+      if (!chat) {
+        throw error;
+      }
+    }
+  }
+
   return chat;
 };
 
