@@ -8,6 +8,19 @@ import { notifyUser } from '../services/notification.service.js';
  * Get or create chat between parent and warden for a student
  */
 const getOrCreateChat = async (parentUserId, wardenUserId, studentId, institutionId) => {
+  const ensureWardenOwnership = async (chatRecord) => {
+    if (!chatRecord) return chatRecord;
+
+    const currentWardenId = chatRecord.wardenId?._id || chatRecord.wardenId;
+    if (String(currentWardenId) !== String(wardenUserId)) {
+      chatRecord.wardenId = wardenUserId;
+      await chatRecord.save();
+      await chatRecord.populate('wardenId', 'name');
+    }
+
+    return chatRecord;
+  };
+
   let chat = await Chat.findOne({
     parentId: parentUserId,
     wardenId: wardenUserId,
@@ -25,6 +38,8 @@ const getOrCreateChat = async (parentUserId, wardenUserId, studentId, institutio
     })
       .sort({ updatedAt: -1 })
       .populate('wardenId', 'name');
+
+    chat = await ensureWardenOwnership(chat);
   }
 
   if (!chat) {
@@ -46,6 +61,8 @@ const getOrCreateChat = async (parentUserId, wardenUserId, studentId, institutio
         })
           .sort({ updatedAt: -1 })
           .populate('wardenId', 'name');
+
+        chat = await ensureWardenOwnership(chat);
       }
 
       if (!chat) {
